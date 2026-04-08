@@ -97,6 +97,8 @@ from sglang.srt.managers.io_struct import (
     DestroyWeightsUpdateGroupReqInput,
     DetachHiCacheStorageReqInput,
     DetachHiCacheStorageReqOutput,
+    DumpMambaTreeReqInput,
+    DumpMambaTreeReqOutput,
     DumperControlReqInput,
     DumperControlReqOutput,
     ExpertDistributionReq,
@@ -1206,6 +1208,7 @@ class Scheduler(
                 (BatchTokenizedGenerateReqInput, self.handle_batch_generate_request),
                 (BatchTokenizedEmbeddingReqInput, self.handle_batch_embedding_request),
                 (FlushCacheReqInput, self.flush_cache_wrapped),
+                (DumpMambaTreeReqInput, self.dump_mamba_tree_wrapped),
                 (ClearHiCacheReqInput, self.clear_hicache_storage_wrapped),
                 (AttachHiCacheStorageReqInput, self.attach_hicache_storage_wrapped),
                 (DetachHiCacheStorageReqInput, self.detach_hicache_storage_wrapped),
@@ -2883,6 +2886,23 @@ class Scheduler(
 
         self._pending_flush = (recv_req, time.monotonic() + timeout_s)
         return None
+
+    def dump_mamba_tree_wrapped(self, recv_req: DumpMambaTreeReqInput):
+        if not hasattr(self.tree_cache, "dump_mamba_tree"):
+            return DumpMambaTreeReqOutput(
+                success=False,
+                error="Tree cache does not support Mamba state dumping",
+            )
+        try:
+            result = self.tree_cache.dump_mamba_tree(recv_req.dump_dir)
+            return DumpMambaTreeReqOutput(
+                success=result["success"],
+                num_nodes_dumped=result["num_nodes_dumped"],
+                tree_info=result["tree_info"],
+            )
+        except Exception as e:
+            logger.error(f"Failed to dump mamba tree: {e}")
+            return DumpMambaTreeReqOutput(success=False, error=str(e))
 
     def clear_hicache_storage_wrapped(self, recv_req: ClearHiCacheReqInput):
         if self.enable_hierarchical_cache:

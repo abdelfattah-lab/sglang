@@ -1132,6 +1132,19 @@ class FlushCacheReqOutput(BaseReq):
 
 
 @dataclass
+class DumpMambaTreeReqInput(BaseReq):
+    dump_dir: str
+
+
+@dataclass
+class DumpMambaTreeReqOutput(BaseReq):
+    success: bool
+    num_nodes_dumped: int = 0
+    tree_info: Optional[Dict] = None
+    error: Optional[str] = None
+
+
+@dataclass
 class AttachHiCacheStorageReqInput(BaseReq):
     """Dynamically attach (enable) HiCache storage backend at runtime.
 

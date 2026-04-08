@@ -39,6 +39,8 @@ from sglang.srt.managers.io_struct import (
     ExpertDistributionReq,
     ExpertDistributionReqOutput,
     ExpertDistributionReqType,
+    DumpMambaTreeReqInput,
+    DumpMambaTreeReqOutput,
     FlushCacheReqInput,
     FlushCacheReqOutput,
     GetInternalStateReq,
@@ -205,6 +207,9 @@ class TokenizerCommunicatorMixin:
         self.flush_cache_communicator = _Communicator(
             self.send_to_scheduler, server_args.dp_size
         )
+        self.dump_mamba_tree_communicator = _Communicator(
+            self.send_to_scheduler, server_args.dp_size
+        )
         self.clear_hicache_storage_communicator = _Communicator(
             self.send_to_scheduler, server_args.dp_size
         )
@@ -309,6 +314,10 @@ class TokenizerCommunicatorMixin:
                     self.flush_cache_communicator.handle_recv,
                 ),
                 (
+                    DumpMambaTreeReqOutput,
+                    self.dump_mamba_tree_communicator.handle_recv,
+                ),
+                (
                     ProfileReqOutput,
                     self.profile_communicator.handle_recv,
                 ),
@@ -349,6 +358,16 @@ class TokenizerCommunicatorMixin:
         self.auto_create_handle_loop()
         return (
             await self.flush_cache_communicator(FlushCacheReqInput(timeout_s=timeout_s))
+        )[0]
+
+    async def dump_mamba_tree(
+        self: TokenizerManager, dump_dir: str
+    ) -> DumpMambaTreeReqOutput:
+        self.auto_create_handle_loop()
+        return (
+            await self.dump_mamba_tree_communicator(
+                DumpMambaTreeReqInput(dump_dir=dump_dir)
+            )
         )[0]
 
     async def clear_hicache_storage(self: TokenizerManager) -> ClearHiCacheReqOutput:

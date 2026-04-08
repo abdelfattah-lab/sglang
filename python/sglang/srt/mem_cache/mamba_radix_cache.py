@@ -20,6 +20,7 @@ The radix tree data structure for managing the hybrid (full and Mamba) KV cache.
 """
 
 import heapq
+import os
 from collections import defaultdict
 from functools import lru_cache, partial
 from typing import TYPE_CHECKING, List, Optional, Tuple
@@ -1288,3 +1289,111 @@ class MambaRadixCache(BasePrefixCache):
                     continue
                 stack.append(child)
         return total_size, total_mamba_size
+
+    def _get_token_path(self, node: TreeNode) -> List[int]:
+        """Walk from node up to root collecting token_ids, reverse to get full prefix."""
+        parts = []
+        cur = node
+        while cur is not None and cur.key is not None and len(cur.key.token_ids) > 0:
+            parts.append(list(cur.key.token_ids))
+            cur = cur.parent
+        parts.reverse()
+        token_path = []
+        for p in parts:
+            token_path.extend(p)
+        return token_path
+
+    def _dump_parent_child_state(
+        self, node: TreeNode, dump_dir: str
+    ) -> None:
+        """Extract a node's Mamba state (and its parent's if available) and save to safetensors."""
+        import json as _json
+
+        from safetensors.torch import save_file
+
+        mamba_pool = self.req_to_token_pool.mamba_pool
+        mamba_cache = mamba_pool.mamba_cache
+
+        child_idx = node.mamba_value.item()
+        tensors = {}
+        metadata = {}
+
+        # Child state
+        for i, conv_t in enumerate(mamba_cache.conv):
+            tensors[f"child_conv_{i}"] = conv_t[:, child_idx].cpu()
+        tensors["child_temporal"] = mamba_cache.temporal[:, child_idx].cpu()
+
+        child_token_path = self._get_token_path(node)
+        metadata["child_node_id"] = str(node.id)
+        metadata["child_pool_idx"] = str(child_idx)
+        metadata["child_token_path_len"] = str(len(child_token_path))
+
+        # Parent state
+        has_parent_state = (
+            node.parent is not None
+            and node.parent.mamba_value is not None
+        )
+        metadata["has_parent_state"] = str(has_parent_state)
+
+        if has_parent_state:
+            parent_idx = node.parent.mamba_value.item()
+            for i, conv_t in enumerate(mamba_cache.conv):
+                tensors[f"parent_conv_{i}"] = conv_t[:, parent_idx].cpu()
+            tensors["parent_temporal"] = mamba_cache.temporal[:, parent_idx].cpu()
+
+            parent_token_path = self._get_token_path(node.parent)
+            metadata["parent_node_id"] = str(node.parent.id)
+            metadata["parent_pool_idx"] = str(parent_idx)
+            metadata["parent_token_path_len"] = str(len(parent_token_path))
+
+        save_file(tensors, os.path.join(dump_dir, f"node_{node.id}.safetensors"), metadata)
+
+    def dump_mamba_tree(self, dump_dir: str) -> dict:
+        """Snapshot the entire radix tree and dump all parent-child Mamba state pairs."""
+        import json as _json
+
+        os.makedirs(dump_dir, exist_ok=True)
+
+        # Collect all nodes (including root and tombstones) for tree structure
+        all_nodes = self._collect_all_nodes()
+        # Collect nodes with mamba state for dumping
+        mamba_nodes = self._collect_nontombstone_nodes()
+
+        # Build tree_info
+        node_infos = []
+        for node in all_nodes:
+            has_mamba = node.mamba_value is not None
+            info = {
+                "id": node.id,
+                "parent_id": node.parent.id if node.parent is not None else None,
+                "has_mamba": has_mamba,
+                "token_count": len(node.key.token_ids) if node.key is not None else 0,
+                "children": [c.id for c in node.children.values()],
+            }
+            if has_mamba:
+                info["mamba_pool_idx"] = node.mamba_value.item()
+            node_infos.append(info)
+
+        tree_info = {"nodes": node_infos}
+
+        with open(os.path.join(dump_dir, "tree_info.json"), "w") as f:
+            _json.dump(tree_info, f, indent=2)
+
+        # Dump each mamba node's state
+        num_dumped = 0
+        for node in mamba_nodes:
+            try:
+                self._dump_parent_child_state(node, dump_dir)
+                num_dumped += 1
+            except Exception as e:
+                logger.warning(f"Failed to dump node {node.id}: {e}")
+
+        logger.info(
+            f"Dumped mamba tree to {dump_dir}: {num_dumped} nodes with state, "
+            f"{len(all_nodes)} total nodes"
+        )
+        return {
+            "success": True,
+            "num_nodes_dumped": num_dumped,
+            "tree_info": tree_info,
+        }

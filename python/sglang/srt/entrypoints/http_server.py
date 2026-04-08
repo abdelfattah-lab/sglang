@@ -733,6 +733,29 @@ async def flush_cache(timeout: float = Query(0.0, ge=0.0)):
     )
 
 
+@app.api_route("/debug/dump_mamba_tree", methods=["POST"])
+@auth_level(AuthLevel.ADMIN_OPTIONAL)
+async def dump_mamba_tree(request: Request):
+    """Snapshot the Mamba radix tree and dump all parent-child state pairs to disk."""
+    body = await request.json()
+    dump_dir = body.get("dump_dir")
+    if not dump_dir:
+        return ORJSONResponse(
+            {"success": False, "error": "dump_dir is required"},
+            status_code=HTTPStatus.BAD_REQUEST,
+        )
+    ret = await _global_state.tokenizer_manager.dump_mamba_tree(dump_dir)
+    return ORJSONResponse(
+        {
+            "success": ret.success,
+            "num_nodes_dumped": ret.num_nodes_dumped,
+            "tree_info": ret.tree_info,
+            "error": ret.error,
+        },
+        status_code=200 if ret.success else HTTPStatus.BAD_REQUEST,
+    )
+
+
 @app.api_route("/clear_hicache_storage_backend", methods=["GET", "POST"])
 @auth_level(AuthLevel.ADMIN_OPTIONAL)
 async def clear_hicache_storage_backend_deprecated():
