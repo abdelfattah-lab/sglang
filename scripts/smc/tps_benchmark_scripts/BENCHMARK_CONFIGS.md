@@ -14,17 +14,13 @@
 
 ## Benchmark Scripts
 
-### SGLang STANDALONE Speculative Decoding
+### SGLang STANDALONE Speculative Decoding (spec v2)
 
 | Script | Target Model | Attention | TP | Env Vars | Method Label |
 |--------|-------------|-----------|-----|----------|--------------|
-| `sglang_sd_1b_8b_triton.sh` | Llama-3.1-8B | triton | 1 | — | `standalone_triton_v1` |
 | `sglang_sd_1b_8b_triton_v2.sh` | Llama-3.1-8B | triton | 1 | `SGLANG_ENABLE_SPEC_V2=True` | `standalone_triton_v2` |
-| `sglang_sd_1b_8b_fa3.sh` | Llama-3.1-8B | fa3 | 1 | — | `standalone_fa3_v1` |
 | `sglang_sd_1b_8b_fa3_v2.sh` | Llama-3.1-8B | fa3 | 1 | `SGLANG_ENABLE_SPEC_V2=True` | `standalone_fa3_v2` |
-| `sglang_sd_1b_70b_triton.sh` | Llama-3.1-70B | triton | 4 | — | `standalone_triton_v1` |
 | `sglang_sd_1b_70b_triton_v2.sh` | Llama-3.1-70B | triton | 4 | `SGLANG_ENABLE_SPEC_V2=True` | `standalone_triton_v2` |
-| `sglang_sd_1b_70b_fa3.sh` | Llama-3.1-70B | fa3 | 4 | — | `standalone_fa3_v1` |
 | `sglang_sd_1b_70b_fa3_v2.sh` | Llama-3.1-70B | fa3 | 4 | `SGLANG_ENABLE_SPEC_V2=True` | `standalone_fa3_v2` |
 
 ### SMC
@@ -35,13 +31,6 @@
 | `smc_1b_8b_fa3.sh` | Llama-3.1-8B | fa3 | 1 | `smc_fa3` |
 | `smc_1b_70b_triton.sh` | Llama-3.1-70B | triton | 4 | `smc_triton` |
 | `smc_1b_70b_fa3.sh` | Llama-3.1-70B | fa3 | 4 | `smc_fa3` |
-
-### SSD
-
-| Script | Target Model | GPUs | Method Label |
-|--------|-------------|------|--------------|
-| `ssd_1b_8b.sh` | Llama-3.1-8B | 2 | `ssd` |
-| `ssd_1b_70b.sh` | Llama-3.1-70B | 5 | `ssd` |
 
 ## STANDALONE Speculative Decoding Parameters
 
@@ -60,20 +49,10 @@
 | `--max-running-requests` | `b * n` (computed) |
 | `--cuda-graph-max-bs` | `b * n` (computed) |
 
-## SSD Parameters
-
-| Parameter | Value |
-|-----------|-------|
-| `--ssd-speculate` | enabled |
-| `--ssd-draft-async` | enabled |
-| `--ssd-speculate-k` | 7 (fixed) |
-| `--ssd-async-fan-out` | 3 (fixed) |
-| `--ssd-max-num-seqs` | `b` (batch size) |
-
 ## SMC (gamma, n) Sweep Pairs
 
-| gamma / k | n / fan_out |
-|-----------|-------------|
+| gamma | n |
+|-------|---|
 | 8 | 8 |
 | 10 | 8 |
 | 10 | 6 |
@@ -90,14 +69,12 @@
 Run all or a subset of benchmarks using group filters:
 
 ```bash
-bash run_all.sh                  # run ALL 16 scripts
-bash run_all.sh sglang           # only SGLang STANDALONE v1 (4 scripts)
-bash run_all.sh sglang-v2        # only SGLang STANDALONE v2 (4 scripts)
+bash run_all.sh                  # run ALL 8 scripts
+bash run_all.sh sglang           # only SGLang STANDALONE (4 scripts)
 bash run_all.sh smc              # only SMC (4 scripts)
-bash run_all.sh ssd              # only SSD (2 scripts)
-bash run_all.sh 8b               # only 8B target models (8 scripts)
-bash run_all.sh 70b              # only 70B target models (8 scripts)
-bash run_all.sh sglang-v2 8b     # combine filters with AND logic (2 scripts)
+bash run_all.sh 8b               # only 8B target models (4 scripts)
+bash run_all.sh 70b              # only 70B target models (4 scripts)
+bash run_all.sh sglang 8b        # combine filters with AND logic (2 scripts)
 ```
 
 Multiple filters use **AND logic** — a script must match all filters to be included.
@@ -108,12 +85,10 @@ Results are saved to a timestamped `results_YYYYMMDD_HHMMSS/` directory with ind
 
 | Group | Description | Scripts |
 |-------|-------------|---------|
-| `sglang` | SGLang STANDALONE v1 (triton + fa3) | 4 |
-| `sglang-v2` | SGLang STANDALONE v2 (`SGLANG_ENABLE_SPEC_V2=True`) | 4 |
+| `sglang` | SGLang STANDALONE (triton + fa3, spec v2) | 4 |
 | `smc` | SMC (triton + fa3) | 4 |
-| `ssd` | SSD backend | 2 |
-| `8b` | 8B target model | 8 |
-| `70b` | 70B target model | 8 |
+| `8b` | 8B target model | 4 |
+| `70b` | 70B target model | 4 |
 
 ### merge_results.sh
 
@@ -143,8 +118,8 @@ Handles filename collisions by prepending the parent directory name. Skips alrea
 method,gamma,n,tps,b
 ```
 
-- **method**: benchmark label (e.g. `standalone_triton_v1`, `smc_triton`, `smc_fa3`, `ssd`)
-- **gamma**: SMC gamma / SSD speculate-k (0 for STANDALONE)
-- **n**: SMC n_particles / SSD fan_out (1 for STANDALONE)
+- **method**: benchmark label (e.g. `standalone_triton_v2`, `smc_triton`, `smc_fa3`)
+- **gamma**: SMC gamma (0 for STANDALONE)
+- **n**: SMC n_particles (1 for STANDALONE)
 - **tps**: output token throughput (tokens/sec)
 - **b**: batch size (num_prompts)

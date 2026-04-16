@@ -6,10 +6,8 @@ set -euo pipefail
 #
 # Usage:
 #   bash run_all.sh                  # run ALL scripts
-#   bash run_all.sh sglang           # only SGLang STANDALONE v1
-#   bash run_all.sh sglang-v2        # only SGLang STANDALONE v2
+#   bash run_all.sh sglang           # only SGLang STANDALONE (spec v2)
 #   bash run_all.sh smc              # only SMC
-#   bash run_all.sh ssd              # only SSD
 #   bash run_all.sh 8b               # only 8B target models
 #   bash run_all.sh 70b              # only 70B target models
 #   bash run_all.sh sglang 8b        # combine filters (AND logic)
@@ -25,21 +23,15 @@ RESULTS_DIR="${SCRIPT_DIR}/results_${TIMESTAMP}"
 # =============================================================================
 SCRIPT_GROUPS=(
   # --- 8B target ---
-  "sglang_sd_1b_8b_triton.sh:sglang,8b"
-  "sglang_sd_1b_8b_triton_v2.sh:sglang-v2,8b"
-  "sglang_sd_1b_8b_fa3.sh:sglang,8b"
-  "sglang_sd_1b_8b_fa3_v2.sh:sglang-v2,8b"
+  "sglang_sd_1b_8b_triton_v2.sh:sglang,8b"
+  "sglang_sd_1b_8b_fa3_v2.sh:sglang,8b"
   "smc_1b_8b_triton.sh:smc,8b"
   "smc_1b_8b_fa3.sh:smc,8b"
-  "ssd_1b_8b.sh:ssd,8b"
   # --- 70B target ---
-  "sglang_sd_1b_70b_triton.sh:sglang,70b"
-  "sglang_sd_1b_70b_triton_v2.sh:sglang-v2,70b"
-  "sglang_sd_1b_70b_fa3.sh:sglang,70b"
-  "sglang_sd_1b_70b_fa3_v2.sh:sglang-v2,70b"
+  "sglang_sd_1b_70b_triton_v2.sh:sglang,70b"
+  "sglang_sd_1b_70b_fa3_v2.sh:sglang,70b"
   "smc_1b_70b_triton.sh:smc,70b"
   "smc_1b_70b_fa3.sh:smc,70b"
-  "ssd_1b_70b.sh:ssd,70b"
 )
 
 # =============================================================================
@@ -79,10 +71,8 @@ if [[ ${#SCRIPTS[@]} -eq 0 ]]; then
   echo "ERROR: No scripts matched filters: ${FILTERS[*]}"
   echo ""
   echo "Available groups:"
-  echo "  sglang     — SGLang STANDALONE v1 (triton + fa3)"
-  echo "  sglang-v2  — SGLang STANDALONE v2 (triton + fa3, SGLANG_ENABLE_SPEC_V2)"
-  echo "  smc        — SMC (triton)"
-  echo "  ssd        — SSD backend"
+  echo "  sglang     — SGLang STANDALONE (triton + fa3, spec v2)"
+  echo "  smc        — SMC (triton + fa3)"
   echo "  8b         — 8B target model only"
   echo "  70b        — 70B target model only"
   echo ""
