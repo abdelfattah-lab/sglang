@@ -352,12 +352,6 @@ class SMCEngine:
         assert recv_req.success, recv_req.message
         return recv_req.message
 
-    def reset_stage_timing_summary(self) -> None:
-        self.collective_rpc("reset_smc_stage_timing_summary")
-
-    def dump_stage_timing_summary(self, path: str) -> None:
-        self.collective_rpc("dump_smc_stage_timing_summary", path=path)
-
     def _execute_profile(self, req: ProfileReq) -> ProfileReqOutput:
         self.send_to_scheduler.send_pyobj(req)
         result = self._recv_expected_scheduler_output(ProfileReqOutput)

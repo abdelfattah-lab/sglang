@@ -19,13 +19,9 @@ Usage:
 """
 
 import argparse
-import json
-import os
 import re
-import tempfile
 import time
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 import numpy as np
 from datasets import load_dataset
@@ -126,9 +122,6 @@ def run_smc_engine_eval(args, prompts, labels):
     with SMCEngine(**engine_kwargs) as engine:
         preds = []
         total_output_tokens = 0
-        stage_timing = None
-        if args.report_stage_timing:
-            engine.reset_stage_timing_summary()
         tic = time.perf_counter()
         for start in range(0, len(prompts), args.batch_size):
             batch = prompts[start : start + args.batch_size]
@@ -156,22 +149,8 @@ def run_smc_engine_eval(args, prompts, labels):
                 flush=True,
             )
         latency = time.perf_counter() - tic
-        if args.report_stage_timing:
-            with tempfile.NamedTemporaryFile(
-                prefix="smc-stage-timing-",
-                suffix=".json",
-                delete=False,
-            ) as fout:
-                stage_timing_path = fout.name
-            try:
-                engine.dump_stage_timing_summary(stage_timing_path)
-                with open(stage_timing_path, "r", encoding="utf-8") as fin:
-                    stage_timing = json.load(fin)
-            finally:
-                if os.path.exists(stage_timing_path):
-                    os.unlink(stage_timing_path)
 
-    return preds, total_output_tokens, latency, stage_timing
+    return preds, total_output_tokens, latency
 
 
 def run_baseline_eval(args, prompts, labels):
@@ -227,55 +206,7 @@ def run_baseline_eval(args, prompts, labels):
             )
         latency = time.perf_counter() - tic
 
-    return preds, total_output_tokens, latency, None
-
-
-def print_stage_timing_summary(stage_timing, wall_time, total_tokens):
-    prefill = stage_timing["prefill"]
-    decode = stage_timing["decode"]
-    accounted_sec = stage_timing["total_accounted_sec"]
-    remaining_sec = max(wall_time - accounted_sec, 0.0)
-    decode_share = (
-        decode["total_sec"] / accounted_sec if accounted_sec > 0 else 0.0
-    )
-    decode_run_tps = (
-        total_tokens / decode["run_batch_sec"] if decode["run_batch_sec"] > 0 else 0.0
-    )
-
-    print("  Stage timing (scheduler-attributed):")
-    print(
-        "    Prefill:"
-        f" total={prefill['total_sec']:.2f}s"
-        f" prepare={prefill['prepare_sec']:.2f}s"
-        f" run={prefill['run_batch_sec']:.2f}s"
-        f" process={prefill['process_result_sec']:.2f}s"
-        f" batches={prefill['batches']}"
-        f" avg_rows={prefill['avg_rows_per_batch']:.1f}"
-    )
-    print(
-        "    Decode:"
-        f" total={decode['total_sec']:.2f}s"
-        f" prepare={decode['prepare_sec']:.2f}s"
-        f" run={decode['run_batch_sec']:.2f}s"
-        f" process={decode['process_result_sec']:.2f}s"
-        f" batches={decode['batches']}"
-        f" avg_rows={decode['avg_rows_per_batch']:.1f}"
-    )
-    print(
-        "    Other scheduler:"
-        f" empty_schedule={stage_timing['empty_schedule_sec']:.2f}s"
-        f" idle={stage_timing['idle_sec']:.2f}s"
-    )
-    print(
-        "    Accounted scheduler time:"
-        f" {accounted_sec:.2f}s ({100 * accounted_sec / wall_time:.1f}% of wall)"
-    )
-    print(
-        "    Remaining wall time outside scheduler buckets:"
-        f" {remaining_sec:.2f}s ({100 * remaining_sec / wall_time:.1f}% of wall)"
-    )
-    print(f"    Decode share of accounted scheduler time: {100 * decode_share:.1f}%")
-    print(f"    Completion tokens / decode run time: {decode_run_tps:.1f} tok/s")
+    return preds, total_output_tokens, latency
 
 
 # ---------------------------------------------------------------------------
@@ -310,13 +241,9 @@ def main(args):
 
     # Run evaluation
     if args.mode == "smc_engine":
-        preds, total_tokens, latency, stage_timing = run_smc_engine_eval(
-            args, prompts, labels
-        )
+        preds, total_tokens, latency = run_smc_engine_eval(args, prompts, labels)
     else:
-        preds, total_tokens, latency, stage_timing = run_baseline_eval(
-            args, prompts, labels
-        )
+        preds, total_tokens, latency = run_baseline_eval(args, prompts, labels)
 
     # Report
     correct = sum(p == l for p, l in zip(preds, labels))
@@ -333,8 +260,6 @@ def main(args):
     print(f"  Output throughput: {total_tokens / latency:.1f} tok/s")
     print(f"  Total tokens:      {total_tokens}")
     print(f"  Wall time:         {latency:.1f}s")
-    if stage_timing is not None:
-        print_stage_timing_summary(stage_timing, latency, total_tokens)
     print(f"{'=' * 55}")
 
 
@@ -404,18 +329,12 @@ if __name__ == "__main__":
         default=False,
         help="pass ignore_eos through engine sampling_params for throughput comparisons",
     )
-    bench.add_argument(
-        "--report-stage-timing",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="print scheduler timing split by prefill vs decode for smc_engine or smc",
-    )
 
-    # Engine overrides (smc / baseline modes)
-    eng = parser.add_argument_group("engine overrides (smc/baseline)")
+    # Engine overrides (smc_engine / baseline modes)
+    eng = parser.add_argument_group("engine overrides (smc_engine/baseline)")
     eng.add_argument("--attention-backend", type=str, default="triton",
                       choices=["triton", "fa3"],
-                      help="attention backend for SMC mode (default: triton)")
+                      help="attention backend for smc_engine mode (default: triton)")
     eng.add_argument("--mem-fraction-static", type=float, default=0.4)
     eng.add_argument("--cuda-graph-max-bs", type=int, default=128)
     eng.add_argument("--max-running-requests", type=int, default=128)
