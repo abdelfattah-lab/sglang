@@ -757,6 +757,9 @@ class Req(ReqDllmMixin):
         # Example: histogram[0] = 5 means 5 steps with 0 accepted tokens, histogram[3] = 10 means 10 steps with 3 accepted tokens.
         self.spec_acceptance_histogram: List[int] = []
 
+        self.smc_group_id: Optional[str] = None
+        self.smc_particle_idx: Optional[int] = None
+
         # The number of times this request has been retracted / preempted.
         self.retraction_count = 0
         self.retraction_mb_id = None
@@ -1847,6 +1850,12 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             return new_pages * page_size
 
         server_args = get_global_server_args()
+        if self.spec_algorithm.is_smc():
+            per_particle = server_args.speculative_num_draft_tokens
+            if page_size > 1:
+                per_particle = ceil_align(per_particle, page_size)
+            return per_particle * len(requests)
+
         len_per_topk = server_args.speculative_num_steps or 1
         spec_topk = server_args.speculative_eagle_topk or 1
         spec_tokens = server_args.speculative_num_draft_tokens
@@ -1957,7 +1966,16 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
                 self.req_to_token_pool, self.token_to_kv_pool_allocator
             )
         # TODO (csy): for preempted requests, we may want to insert into the tree
-        release_kv_cache(req, self.tree_cache, is_insert=False)
+        if req.smc_particle_idx is not None:
+            from sglang.srt.smc.common.utils import _release_internal_req
+
+            _release_internal_req(
+                req,
+                req_to_token_pool=self.req_to_token_pool,
+                token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
+            )
+        else:
+            release_kv_cache(req, self.tree_cache, is_insert=False)
         # NOTE(lsyin): we should use the newly evictable memory instantly.
         num_tokens = remaing_req_count * envs.SGLANG_RETRACT_DECODE_STEPS.get()
         evict_from_tree_cache(self.tree_cache, num_tokens)
@@ -2003,9 +2021,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         if hasattr(self, "nsa_cp_metadata") and self.nsa_cp_metadata is not None:
             self.nsa_cp_metadata = None
 
-        if self.is_spec_v2:
-            # TODO(spec-v2): all spec v2 should go through this path
-            draft_input: EagleDraftInput = self.spec_info
+        if self.is_spec_v2 or self.spec_algorithm.is_smc():
+            # Spec v2 (EAGLE) and SMC both manage their own KV allocation
+            # and seq_lens advancement inside prepare_for_decode.
+            draft_input = self.spec_info
             draft_input.prepare_for_decode(self)
 
         if not self.spec_algorithm.is_none():

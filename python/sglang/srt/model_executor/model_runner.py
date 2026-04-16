@@ -1967,6 +1967,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         if (
             self.spec_algorithm.is_eagle()
             or self.spec_algorithm.is_standalone()
+            or self.spec_algorithm.is_smc()
             or self.spec_algorithm.is_ngram()
         ):
             return not self.is_draft_worker
@@ -2002,6 +2003,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             self.spec_algorithm.is_eagle()
             or self.spec_algorithm.is_standalone()
             or self.spec_algorithm.is_ngram()
+            or (self.spec_algorithm.is_smc() and not self.is_draft_worker)
         ):
             if self.is_draft_worker:
                 raise RuntimeError("This should not happen")
@@ -2115,12 +2117,25 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
         def get_spec_info():
             spec_info = None
-            if self.spec_algorithm.is_eagle() or self.spec_algorithm.is_standalone():
-                from sglang.srt.speculative.eagle_info import EagleVerifyInput
-
+            if (
+                self.spec_algorithm.is_eagle()
+                or self.spec_algorithm.is_standalone()
+                or (self.spec_algorithm.is_smc() and not self.is_draft_worker)
+            ):
                 if self.is_draft_worker:
                     raise RuntimeError("This should not happen.")
+                elif self.spec_algorithm.is_smc():
+                    from sglang.srt.smc.common.verify import SMCVerifyInput
+
+                    spec_info = SMCVerifyInput(
+                        draft_token_num=num_tokens_per_bs,
+                        positions=None,
+                        capture_hidden_mode=CaptureHiddenMode.NULL,
+                        num_tokens_per_req=num_tokens_per_bs,
+                    )
                 else:
+                    from sglang.srt.speculative.eagle_info import EagleVerifyInput
+
                     spec_info = EagleVerifyInput(
                         draft_token=None,
                         custom_mask=buffers.custom_mask,
@@ -2652,7 +2667,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             else forward_batch.forward_mode.is_cuda_graph
         )
         can_run_graph = bool(
-            mode_check()
+            not getattr(forward_batch, "disable_graph_runner", False)
+            and mode_check()
             and self.graph_runner
             and self.graph_runner.can_run(forward_batch)
         )

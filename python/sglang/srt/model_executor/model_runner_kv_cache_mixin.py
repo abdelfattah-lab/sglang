@@ -372,6 +372,10 @@ class ModelRunnerKVCacheMixin:
     def _init_pools(self: ModelRunner):
         """Initialize the memory pools."""
         max_num_reqs = self.max_running_requests
+        if self.server_args.speculative_algorithm == "SMC":
+            # SMC keeps one outward-facing parent Req plus draft/target internal
+            # particle Reqs for each particle.
+            max_num_reqs *= 2 * self.server_args.smc_n_particles + 1
 
         # Initialize req_to_token_pool
         if self.req_to_token_pool is None:
@@ -670,13 +674,28 @@ class ModelRunnerKVCacheMixin:
                     )
                 else:
                     if self.page_size == 1:
-                        self.token_to_kv_pool_allocator = TokenToKVPoolAllocator(
+                        if self.spec_algorithm.is_smc():
+                            from sglang.srt.smc.mem_cache.allocator import (
+                                SMCRefCountedTokenAllocator,
+                            )
+
+                            allocator_cls = SMCRefCountedTokenAllocator
+                        else:
+                            allocator_cls = TokenToKVPoolAllocator
+                        self.token_to_kv_pool_allocator = allocator_cls(
                             self.max_total_num_tokens,
                             dtype=self.kv_cache_dtype,
                             device=self.device,
                             kvcache=self.token_to_kv_pool,
                             need_sort=need_sort,
                         )
+                        if self.spec_algorithm.is_smc():
+                            assert hasattr(
+                                self.token_to_kv_pool_allocator, "slot_ref_count"
+                            ), (
+                                "SMC requires SMCRefCountedTokenAllocator; got "
+                                f"{type(self.token_to_kv_pool_allocator).__name__}"
+                            )
                     else:
                         self.token_to_kv_pool_allocator = PagedTokenToKVPoolAllocator(
                             self.max_total_num_tokens,

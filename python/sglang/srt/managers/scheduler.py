@@ -1291,6 +1291,8 @@ class Scheduler(
             if self._engine_paused:
                 continue
 
+            processed_last_batch = False
+
             # Get the next batch to run
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
@@ -1298,8 +1300,9 @@ class Scheduler(
 
             # If we do not need to overlap the current batch with the last batch,
             # we can process the last batch immediately.
-            if disable_overlap_for_batch:
+            if disable_overlap_for_batch and self.last_batch and not processed_last_batch:
                 pop_and_process()
+                processed_last_batch = True
 
             # Launch the current batch
             if batch:
@@ -1311,11 +1314,12 @@ class Scheduler(
 
             # Process the last batch
             if self.last_batch:
-                if not disable_overlap_for_batch:
+                if not disable_overlap_for_batch and not processed_last_batch:
                     pop_and_process()
-            elif batch is None:
-                # When the server is idle, do self-check and re-init some states
-                self.self_check_during_idle()
+                    processed_last_batch = True
+                elif batch is None:
+                    # When the server is idle, do self-check and re-init some states
+                    self.self_check_during_idle()
 
             # Run sample of the current batch
             # It depends on the result of the last batch (e.g., grammar), so we run it after the last batch is processed.
@@ -2497,8 +2501,7 @@ class Scheduler(
                 # In most cases, we use the model worker batch to run the forward.
                 worker_batch_or_batch = batch.get_model_worker_batch()
             else:
-                # In speculative decoding v1 (non-overlap) case, we use the batch directly.
-                # TODO(lsyin): delete this branch after unifying the abstraction.
+                # In non-overlap speculative decoding, use ScheduleBatch directly.
                 worker_batch_or_batch = batch
 
             if self.enable_overlap:
@@ -2535,14 +2538,8 @@ class Scheduler(
                 if batch.is_spec_v2:
                     # FIXME(lsyin): tmp code for spec v2
                     # We only keep future indices for next draft input
-
                     batch.spec_info = batch_result.next_draft_input
                     batch.spec_info.future_indices = future_indices
-
-                    # batch.spec_info = EagleDraftInput(
-                    #     future_indices=future_indices,
-                    #     verify_done=batch_result.next_draft_input.verify_done,
-                    # )
 
                     # The future value, usually for next batch preparation
                     # Current implementation strictly synchronizes the seq_lens
