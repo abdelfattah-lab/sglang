@@ -510,9 +510,16 @@ class SMCSchedulerV2(Scheduler):
     # ── Runtime Memory Checks (override base mixin) ──
     #
     # SMC v2 keeps its decode KV slots inside ScheduleBatchSMC, which the base
-    # SchedulerRuntimeCheckerMixin doesn't know about.  We override the three
-    # leak checks so slot-held tokens/reqs are folded into the conservation
-    # formulas — without leaking SMC concepts into core scheduler code.
+    # SchedulerRuntimeCheckerMixin doesn't know about.  We override the two
+    # idle-path leak checks so slot-held tokens/reqs are folded into the
+    # conservation formulas — without leaking SMC concepts into core scheduler
+    # code.  Refcount state is already reflected via available_size (a shared
+    # page stays out of free_pages until its last refcount drops).
+    #
+    # self_check_during_busy is intentionally NOT overridden: _event_loop_v2
+    # never dispatches it (matching the PP / disagg / multiplex loops, which
+    # also omit the busy check).  Re-add it here if the v2 loop is ever wired
+    # to call self_check_during_busy.
 
     def _check_radix_cache_memory(self):
         _, _, available_size, evictable_size = self._get_token_info()
@@ -527,53 +534,6 @@ class SMCSchedulerV2(Scheduler):
             f"{protected_size=}, {session_held=}, {slot_held=}\n"
         )
         return memory_leak, token_msg
-
-    def self_check_during_busy(self):
-        from sglang.srt.environ import envs
-
-        current_batch: ScheduleBatch = self.last_batch
-
-        if current_batch is None:
-            return
-
-        spec_topk = self.server_args.speculative_eagle_topk or 1
-        if spec_topk > 1:
-            import warnings
-
-            warnings.warn(
-                "Runtime memory check (busy) is not supported when speculation topk > 1."
-            )
-            return
-
-        _, _, available_size, evictable_size = self._get_token_info()
-        protected_size = self.tree_cache.protected_size()
-
-        uncached_size = self._get_batch_uncached_size(current_batch)
-
-        if (
-            current_batch.forward_mode.is_extend()
-            and self.running_batch is not None
-            and not self.running_batch.is_empty()
-        ):
-            uncached_size += self._get_batch_uncached_size(self.running_batch)
-
-        if envs.SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_BUSY.get() > 1:
-            log_msg = f"[Mem Check (BUSY)] {available_size=}, {evictable_size=}, {protected_size=}, {uncached_size=}"
-            logger.info(log_msg)
-
-        session_held = self._session_held_tokens()
-        slot_held = self.slot_state.held_token_count()
-        total_tokens = (
-            available_size
-            + evictable_size
-            + protected_size
-            + uncached_size
-            + session_held
-            + slot_held
-        )
-        assert (
-            total_tokens == self.max_total_num_tokens
-        ), f"Mem Leak Detected! {total_tokens=} vs {self.max_total_num_tokens=}"
 
     def _check_req_pool(self):
         from sglang.srt.environ import envs
