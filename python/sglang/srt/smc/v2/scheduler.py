@@ -507,6 +507,105 @@ class SMCSchedulerV2(Scheduler):
             if hasattr(self, "waiting_queue"):
                 self.waiting_queue = []
 
+    # ── Runtime Memory Checks (override base mixin) ──
+    #
+    # SMC v2 keeps its decode KV slots inside ScheduleBatchSMC, which the base
+    # SchedulerRuntimeCheckerMixin doesn't know about.  We override the three
+    # leak checks so slot-held tokens/reqs are folded into the conservation
+    # formulas — without leaking SMC concepts into core scheduler code.
+
+    def _check_radix_cache_memory(self):
+        _, _, available_size, evictable_size = self._get_token_info()
+        protected_size = self.tree_cache.protected_size()
+        session_held = self._session_held_tokens()
+        slot_held = self.slot_state.held_token_count()
+        memory_leak = (available_size + evictable_size) != (
+            self.max_total_num_tokens - protected_size - session_held - slot_held
+        )
+        token_msg = (
+            f"{self.max_total_num_tokens=}, {available_size=}, {evictable_size=}, "
+            f"{protected_size=}, {session_held=}, {slot_held=}\n"
+        )
+        return memory_leak, token_msg
+
+    def self_check_during_busy(self):
+        from sglang.srt.environ import envs
+
+        current_batch: ScheduleBatch = self.last_batch
+
+        if current_batch is None:
+            return
+
+        spec_topk = self.server_args.speculative_eagle_topk or 1
+        if spec_topk > 1:
+            import warnings
+
+            warnings.warn(
+                "Runtime memory check (busy) is not supported when speculation topk > 1."
+            )
+            return
+
+        _, _, available_size, evictable_size = self._get_token_info()
+        protected_size = self.tree_cache.protected_size()
+
+        uncached_size = self._get_batch_uncached_size(current_batch)
+
+        if (
+            current_batch.forward_mode.is_extend()
+            and self.running_batch is not None
+            and not self.running_batch.is_empty()
+        ):
+            uncached_size += self._get_batch_uncached_size(self.running_batch)
+
+        if envs.SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_BUSY.get() > 1:
+            log_msg = f"[Mem Check (BUSY)] {available_size=}, {evictable_size=}, {protected_size=}, {uncached_size=}"
+            logger.info(log_msg)
+
+        session_held = self._session_held_tokens()
+        slot_held = self.slot_state.held_token_count()
+        total_tokens = (
+            available_size
+            + evictable_size
+            + protected_size
+            + uncached_size
+            + session_held
+            + slot_held
+        )
+        assert (
+            total_tokens == self.max_total_num_tokens
+        ), f"Mem Leak Detected! {total_tokens=} vs {self.max_total_num_tokens=}"
+
+    def _check_req_pool(self):
+        from sglang.srt.environ import envs
+        from sglang.srt.utils.common import raise_error_or_warn
+
+        if self.disaggregation_mode == DisaggregationMode.DECODE:
+            req_total_size = (
+                self.req_to_token_pool.size + self.req_to_token_pool.pre_alloc_size
+            )
+        else:
+            req_total_size = self.req_to_token_pool.size
+
+        session_req_count = self._session_held_req_count()
+        slot_req_count = self.slot_state.held_req_count()
+        if (
+            len(self.req_to_token_pool.free_slots) + session_req_count + slot_req_count
+            != req_total_size
+        ):
+            msg = (
+                "req_to_token_pool memory leak detected!"
+                f"available_size={len(self.req_to_token_pool.free_slots)}, "
+                f"session_held={session_req_count}, "
+                f"slot_held={slot_req_count}, "
+                f"total_size={self.req_to_token_pool.size}\n"
+            )
+            raise_error_or_warn(
+                self,
+                envs.SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE.get(),
+                "count_req_pool_leak_warnings",
+                msg,
+            )
+
     # ── Request Admission ──
 
     def _add_request_to_queue(self, req: Req, is_retracted: bool = False):

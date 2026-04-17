@@ -21,18 +21,6 @@ logger = logging.getLogger(__name__)
 
 
 class SchedulerRuntimeCheckerMixin:
-    def _smc_held_token_count(self: Scheduler) -> int:
-        slot_state = getattr(self, "slot_state", None)
-        if slot_state is not None and hasattr(slot_state, "held_token_count"):
-            return slot_state.held_token_count()
-        return 0
-
-    def _smc_held_req_count(self: Scheduler) -> int:
-        slot_state = getattr(self, "slot_state", None)
-        if slot_state is not None and hasattr(slot_state, "held_req_count"):
-            return slot_state.held_req_count()
-        return 0
-
     def _session_held_tokens(self: Scheduler) -> int:
         if isinstance(self.tree_cache, SessionAwareCache):
             return self.tree_cache.session_held_tokens()
@@ -196,11 +184,10 @@ class SchedulerRuntimeCheckerMixin:
         _, _, available_size, evictable_size = self._get_token_info()
         protected_size = self.tree_cache.protected_size()
         session_held = self._session_held_tokens()
-        smc_held = self._smc_held_token_count()
-        memory_leak = (available_size + evictable_size + smc_held) != (
+        memory_leak = (available_size + evictable_size) != (
             self.max_total_num_tokens - protected_size - session_held
         )
-        token_msg = f"{self.max_total_num_tokens=}, {available_size=}, {evictable_size=}, {protected_size=}, {session_held=}, {smc_held=}\n"
+        token_msg = f"{self.max_total_num_tokens=}, {available_size=}, {evictable_size=}, {protected_size=}, {session_held=}\n"
         return memory_leak, token_msg
 
     def _get_batch_uncached_size(self: Scheduler, batch: ScheduleBatch) -> int:
@@ -249,14 +236,12 @@ class SchedulerRuntimeCheckerMixin:
             logger.info(log_msg)
 
         session_held = self._session_held_tokens()
-        smc_held = self._smc_held_token_count()
         total_tokens = (
             available_size
             + evictable_size
             + protected_size
             + uncached_size
             + session_held
-            + smc_held
         )
         assert (
             total_tokens == self.max_total_num_tokens
@@ -271,18 +256,11 @@ class SchedulerRuntimeCheckerMixin:
             req_total_size = self.req_to_token_pool.size
 
         session_req_count = self._session_held_req_count()
-        smc_req_count = self._smc_held_req_count()
-        if (
-            len(self.req_to_token_pool.free_slots)
-            + session_req_count
-            + smc_req_count
-            != req_total_size
-        ):
+        if len(self.req_to_token_pool.free_slots) + session_req_count != req_total_size:
             msg = (
                 "req_to_token_pool memory leak detected!"
                 f"available_size={len(self.req_to_token_pool.free_slots)}, "
                 f"session_held={session_req_count}, "
-                f"smc_held={smc_req_count}, "
                 f"total_size={self.req_to_token_pool.size}\n"
             )
             raise_error_or_warn(
