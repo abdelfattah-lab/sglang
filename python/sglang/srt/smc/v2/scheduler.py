@@ -106,7 +106,6 @@ class SequenceGroup:
                 temperature=self.particle_temperature,
                 return_logprob=False,
             )
-            particle_req.smc_group_id = parent_req.rid
             particle_reqs.append(particle_req)
 
         self.particle_reqs = {req.smc_particle_idx: req for req in particle_reqs}
@@ -511,7 +510,14 @@ class SMCSchedulerV2(Scheduler):
     # ── Request Admission ──
 
     def _add_request_to_queue(self, req: Req, is_retracted: bool = False):
-        del is_retracted
+        if is_retracted:
+            # SMC v2 has no retraction path: particle groups are atomic and
+            # cannot be partially retracted, and there is no group-aware
+            # re-admission protocol.  ScheduleBatch.retract_decode is also
+            # unreachable in v2 (decode runs through ScheduleBatchSMC).
+            raise NotImplementedError(
+                "SMCSchedulerV2 does not support re-admitting retracted reqs."
+            )
         if self.disaggregation_mode != DisaggregationMode.NULL:
             raise RuntimeError("SMCSchedulerV2 only supports non-disaggregated generation.")
         if not self._set_or_validate_priority(req):
