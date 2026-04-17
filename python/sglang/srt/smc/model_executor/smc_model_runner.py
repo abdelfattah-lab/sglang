@@ -1,13 +1,16 @@
 """SMC variant of ModelRunner.
 
-Replaces the standard ``TokenToKVPoolAllocator`` with
-``SMCRefCountedTokenAllocator`` so SMC particles can share KV slots via
-refcounts.  The swap happens inside ``_init_pools`` immediately after
-the standard allocator is constructed, before anything else can cache a
-stale reference to it.
+Overrides three extension points so core never imports from SMC:
+- ``_init_pools`` swaps in ``SMCRefCountedTokenAllocator`` for refcounted
+  KV slots (shared parent prefix across particles).
+- ``_build_dummy_run_spec_info`` returns ``SMCVerifyInput`` during the
+  autotune / warmup dummy run so attention backends see the SMC path.
+- ``_get_graph_runner_class`` returns ``SMCCudaGraphRunner`` which in
+  turn returns ``SMCVerifyInput`` during CUDA graph capture.
 """
 
 from sglang.srt.mem_cache.allocator import TokenToKVPoolAllocator
+from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.smc.mem_cache.allocator import SMCRefCountedTokenAllocator
 
@@ -30,3 +33,24 @@ class SMCModelRunner(ModelRunner):
                 kvcache=self.token_to_kv_pool,
                 need_sort=self.server_args.disaggregation_mode in ("decode", "prefill"),
             )
+
+    def _build_dummy_run_spec_info(self, buffers, num_tokens_per_bs):
+        if self.spec_algorithm.is_smc() and not self.is_draft_worker:
+            from sglang.srt.smc.common.verify import SMCVerifyInput
+
+            return SMCVerifyInput(
+                draft_token_num=num_tokens_per_bs,
+                positions=None,
+                capture_hidden_mode=CaptureHiddenMode.NULL,
+                num_tokens_per_req=num_tokens_per_bs,
+            )
+        return super()._build_dummy_run_spec_info(buffers, num_tokens_per_bs)
+
+    def _get_graph_runner_class(self):
+        if self.device == "cuda":
+            from sglang.srt.smc.model_executor.smc_cuda_graph_runner import (
+                SMCCudaGraphRunner,
+            )
+
+            return SMCCudaGraphRunner
+        return super()._get_graph_runner_class()

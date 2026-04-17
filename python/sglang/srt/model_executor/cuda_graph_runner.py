@@ -1175,24 +1175,11 @@ class CudaGraphRunner:
         if (
             self.model_runner.spec_algorithm.is_eagle()
             or self.model_runner.spec_algorithm.is_standalone()
-            or (
-                self.model_runner.spec_algorithm.is_smc()
-                and not self.model_runner.is_draft_worker
-            )
         ):
             from sglang.srt.speculative.eagle_info import EagleVerifyInput
 
             if self.model_runner.is_draft_worker:
                 raise RuntimeError("This should not happen.")
-            elif self.model_runner.spec_algorithm.is_smc():
-                from sglang.srt.smc.common.verify import SMCVerifyInput
-
-                spec_info = SMCVerifyInput(
-                    draft_token_num=self.num_tokens_per_bs,
-                    positions=None,
-                    capture_hidden_mode=CaptureHiddenMode.NULL,
-                    num_tokens_per_req=self.num_tokens_per_bs,
-                )
             else:
                 spec_info = EagleVerifyInput(
                     draft_token=None,
