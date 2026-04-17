@@ -755,12 +755,7 @@ class ServerArgs:
         self._handle_ssl_validation()
 
         if self.model_path.lower() in ["none", "dummy"]:
-            # Keep the dummy-model fast path, but still run lightweight defaulting and
-            # speculative validation that unit tests rely on.
-            self._handle_missing_default_values()
-            self._handle_page_size()
-            if self.speculative_algorithm in ("SMC", "NGRAM"):
-                self._handle_speculative_decoding()
+            # Skip for dummy models
             return
 
         # Handle deprecated arguments.
@@ -6695,7 +6690,7 @@ def auto_choose_speculative_params(self: ServerArgs):
     """
     hf_config = self.get_model_config().hf_config
     arch = hf_config.architectures[0]
-    if self.speculative_algorithm in ("STANDALONE", "SMC"):
+    if self.speculative_algorithm == "STANDALONE":
         # The default value for standalone speculative decoding
         return (3, 1, 4)
     if arch in ["LlamaForCausalLM"]:

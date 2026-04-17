@@ -1180,6 +1180,8 @@ class CudaGraphRunner:
                 and not self.model_runner.is_draft_worker
             )
         ):
+            from sglang.srt.speculative.eagle_info import EagleVerifyInput
+
             if self.model_runner.is_draft_worker:
                 raise RuntimeError("This should not happen.")
             elif self.model_runner.spec_algorithm.is_smc():
@@ -1192,8 +1194,6 @@ class CudaGraphRunner:
                     num_tokens_per_req=self.num_tokens_per_bs,
                 )
             else:
-                from sglang.srt.speculative.eagle_info import EagleVerifyInput
-
                 spec_info = EagleVerifyInput(
                     draft_token=None,
                     custom_mask=self.buffers.custom_mask,

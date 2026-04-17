@@ -2022,8 +2022,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             self.nsa_cp_metadata = None
 
         if self.is_spec_v2 or self.spec_algorithm.is_smc():
-            # Spec v2 (EAGLE) and SMC both manage their own KV allocation
-            # and seq_lens advancement inside prepare_for_decode.
+            # TODO(spec-v2): all spec v2 should go through this path
             draft_input = self.spec_info
             draft_input.prepare_for_decode(self)
 

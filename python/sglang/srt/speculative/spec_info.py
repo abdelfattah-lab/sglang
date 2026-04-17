@@ -115,7 +115,6 @@ class SpecInputType(IntEnum):
     EAGLE_DRAFT = auto()
     EAGLE_VERIFY = auto()
     SMC_DRAFT = auto()
-    SMC_SCORE = auto()
     SMC_VERIFY = auto()
     NGRAM_VERIFY = auto()
 
@@ -135,7 +134,6 @@ class SpecInput(ABC):
     def is_verify_input(self) -> bool:
         return self.spec_input_type in {
             SpecInputType.EAGLE_VERIFY,
-            SpecInputType.SMC_SCORE,
             SpecInputType.NGRAM_VERIFY,
         }
 

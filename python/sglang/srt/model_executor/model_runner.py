@@ -2122,6 +2122,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 or self.spec_algorithm.is_standalone()
                 or (self.spec_algorithm.is_smc() and not self.is_draft_worker)
             ):
+                from sglang.srt.speculative.eagle_info import EagleVerifyInput
+
                 if self.is_draft_worker:
                     raise RuntimeError("This should not happen.")
                 elif self.spec_algorithm.is_smc():
@@ -2134,8 +2136,6 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                         num_tokens_per_req=num_tokens_per_bs,
                     )
                 else:
-                    from sglang.srt.speculative.eagle_info import EagleVerifyInput
-
                     spec_info = EagleVerifyInput(
                         draft_token=None,
                         custom_mask=buffers.custom_mask,
@@ -2667,8 +2667,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             else forward_batch.forward_mode.is_cuda_graph
         )
         can_run_graph = bool(
-            not getattr(forward_batch, "disable_graph_runner", False)
-            and mode_check()
+            mode_check()
             and self.graph_runner
             and self.graph_runner.can_run(forward_batch)
         )
