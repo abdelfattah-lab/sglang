@@ -175,7 +175,7 @@ def build_engine(args: argparse.Namespace):
             attention_backend="fa3",
             smc_draft_temperature=0.8,
             smc_target_temperature=0.8,
-            max_running_requests=128,
+            max_running_requests=16,
         )
 
     from sglang.srt.smc.engine import SMCEngine
@@ -195,7 +195,7 @@ def build_engine(args: argparse.Namespace):
         attention_backend="fa3",
         draft_temperature=0.8,
         target_temperature=0.8,
-        max_running_requests=128,
+        max_running_requests=16,
     )
 
 

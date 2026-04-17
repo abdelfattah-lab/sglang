@@ -113,7 +113,7 @@ def run_smc_engine_eval(args, prompts, labels):
     if args.max_running_requests is not None:
         engine_kwargs["max_running_requests"] = args.max_running_requests
     else:
-        engine_kwargs["max_running_requests"] = max(args.particles + 4, 16)
+        engine_kwargs["max_running_requests"] = 8
     sampling_params = {
         "max_new_tokens": args.max_new_tokens,
         "ignore_eos": args.ignore_eos,
@@ -337,7 +337,7 @@ if __name__ == "__main__":
                       help="attention backend for smc_engine mode (default: triton)")
     eng.add_argument("--mem-fraction-static", type=float, default=0.4)
     eng.add_argument("--cuda-graph-max-bs", type=int, default=128)
-    eng.add_argument("--max-running-requests", type=int, default=128)
+    eng.add_argument("--max-running-requests", type=int, default=16)
 
     args = parser.parse_args()
     main(args)

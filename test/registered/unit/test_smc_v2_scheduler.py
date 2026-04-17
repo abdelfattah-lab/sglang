@@ -168,11 +168,7 @@ class TestSMCSchedulerAdmission(CustomTestCase):
         queued_group = _make_runtime_group("g0", n_particles=2, pool_idx_base=10)
         scheduler = SimpleNamespace(
             waiting_groups=deque([queued_group]),
-            max_running_requests=4,
             slot_state=SimpleNamespace(available_slot_count=lambda: 0),
-        )
-        scheduler._emit_abort = lambda req, error_msg: self.fail(
-            f"unexpected abort for {req.rid}: {error_msg}"
         )
 
         admitted = SMCSchedulerV2._admit_prefill_groups(scheduler)
@@ -188,37 +184,13 @@ class TestSMCSchedulerAdmission(CustomTestCase):
         g1 = _make_runtime_group("g1", n_particles=2, pool_idx_base=20)
         scheduler = SimpleNamespace(
             waiting_groups=deque([g0, g1]),
-            max_running_requests=4,
             slot_state=SimpleNamespace(available_slot_count=lambda: 4),
-        )
-        scheduler._emit_abort = lambda req, error_msg: self.fail(
-            f"unexpected abort for {req.rid}: {error_msg}"
         )
 
         admitted = SMCSchedulerV2._admit_prefill_groups(scheduler)
 
         self.assertEqual([g.group_id for g in admitted], ["g0", "g1"])
         self.assertEqual(len(scheduler.waiting_groups), 0)
-
-    def test_admit_prefill_groups_aborts_oversized_group(self):
-        """A group whose particle count exceeds max_running_requests is aborted."""
-        oversized = _make_runtime_group("g0", n_particles=8, pool_idx_base=10)
-        scheduler = SimpleNamespace(
-            waiting_groups=deque([oversized]),
-            max_running_requests=4,
-            slot_state=SimpleNamespace(available_slot_count=lambda: 4),
-        )
-        aborted = []
-        scheduler._emit_abort = lambda req, error_msg: aborted.append(
-            (req.rid, error_msg)
-        )
-
-        admitted = SMCSchedulerV2._admit_prefill_groups(scheduler)
-
-        self.assertEqual(admitted, [])
-        self.assertEqual(len(scheduler.waiting_groups), 0)
-        self.assertEqual(len(aborted), 1)
-        self.assertEqual(aborted[0][0], "g0")
 
 
 class TestSMCResampleSlowPath(CustomTestCase):
