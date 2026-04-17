@@ -670,28 +670,13 @@ class ModelRunnerKVCacheMixin:
                     )
                 else:
                     if self.page_size == 1:
-                        if self.spec_algorithm.is_smc():
-                            from sglang.srt.smc.mem_cache.allocator import (
-                                SMCRefCountedTokenAllocator,
-                            )
-
-                            allocator_cls = SMCRefCountedTokenAllocator
-                        else:
-                            allocator_cls = TokenToKVPoolAllocator
-                        self.token_to_kv_pool_allocator = allocator_cls(
+                        self.token_to_kv_pool_allocator = TokenToKVPoolAllocator(
                             self.max_total_num_tokens,
                             dtype=self.kv_cache_dtype,
                             device=self.device,
                             kvcache=self.token_to_kv_pool,
                             need_sort=need_sort,
                         )
-                        if self.spec_algorithm.is_smc():
-                            assert hasattr(
-                                self.token_to_kv_pool_allocator, "slot_ref_count"
-                            ), (
-                                "SMC requires SMCRefCountedTokenAllocator; got "
-                                f"{type(self.token_to_kv_pool_allocator).__name__}"
-                            )
                     else:
                         self.token_to_kv_pool_allocator = PagedTokenToKVPoolAllocator(
                             self.max_total_num_tokens,

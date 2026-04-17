@@ -456,7 +456,24 @@ class SMCSchedulerV2(Scheduler):
             batch_is_full=False,
         )
 
-    # ── Worker override: use SMCWorkerV2 ──
+    # ── Worker overrides: use SMC variants ──
+
+    def init_tp_model_worker(self):
+        # Construct SMCTpModelWorker so the target model_runner uses
+        # SMCRefCountedTokenAllocator instead of TokenToKVPoolAllocator.
+        from sglang.srt.smc.managers.smc_tp_worker import SMCTpModelWorker
+
+        self.tp_worker = SMCTpModelWorker(
+            server_args=self.server_args,
+            gpu_id=self.gpu_id,
+            tp_rank=self.tp_rank,
+            moe_ep_rank=self.moe_ep_rank,
+            pp_rank=self.pp_rank,
+            attn_cp_rank=self.attn_cp_rank,
+            moe_dp_rank=self.moe_dp_rank,
+            dp_rank=self.dp_rank,
+            nccl_port=self.nccl_port,
+        )
 
     def maybe_init_draft_worker(self):
         from sglang.srt.smc.v2.worker import SMCWorkerV2
