@@ -2954,8 +2954,8 @@ class ServerArgs:
                 raise ValueError("--smc-draft-temperature must be >= 0.")
             if self.smc_target_temperature < 0:
                 raise ValueError("--smc-target-temperature must be >= 0.")
-            if not 0 < self.smc_resample_threshold <= 1:
-                raise ValueError("--smc-resample-threshold must be in (0, 1].")
+            if not 0 <= self.smc_resample_threshold <= 1:
+                raise ValueError("--smc-resample-threshold must be in [0, 1] (0 disables resampling).")
             prefill_attention_backend, decode_attention_backend = (
                 self.get_attention_backends()
             )
