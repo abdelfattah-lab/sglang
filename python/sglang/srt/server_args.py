@@ -506,6 +506,7 @@ class ServerArgs:
     smc_resample_threshold: float = 0.5
     smc_resample_method: Literal["systematic", "multinomial"] = "systematic"
     smc_fast_resample: bool = False
+    smc_draft_mode: Literal["dense", "eagle3"] = "dense"
 
     # Speculative decoding (ngram)
     speculative_ngram_min_match_window_size: int = 1
@@ -4847,6 +4848,17 @@ class ServerArgs:
             choices=["systematic", "multinomial"],
             default=ServerArgs.smc_resample_method,
             help="Resampling method for SMC speculative decoding.",
+        )
+        parser.add_argument(
+            "--smc-draft-mode",
+            type=str,
+            choices=["dense", "eagle3"],
+            default=ServerArgs.smc_draft_mode,
+            help=(
+                "SMC draft model architecture. 'dense' runs an ordinary LM as "
+                "the draft. 'eagle3' runs an EAGLE3 head over the target's "
+                "aux hidden states."
+            ),
         )
         parser.add_argument(
             "--smc-fast-resample",
