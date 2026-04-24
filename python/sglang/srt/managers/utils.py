@@ -8,6 +8,7 @@ import torch
 
 from sglang.srt.eplb.expert_distribution import ExpertDistributionMetrics
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
+from sglang.srt.layers.moe.routed_experts_capturer import RoutedExpertsOutput
 from sglang.srt.managers.overlap_utils import FutureIndices
 from sglang.srt.managers.schedule_batch import Req
 from sglang.srt.model_executor.forward_batch_info import PPProxyTensors
@@ -46,6 +47,9 @@ class GenerationBatchResult:
 
     # relay path: forward stream -> next step forward
     next_draft_input: Optional[EagleDraftInput] = None
+
+    # Routed experts: pending async D2H for overlap scheduling
+    routed_experts_output: Optional[RoutedExpertsOutput] = None
 
     # metrics
     expert_distribution_metrics: Optional[ExpertDistributionMetrics] = None
@@ -89,6 +93,9 @@ class GenerationBatchResult:
             self.accept_lens = self.accept_lens.to("cpu", non_blocking=True)
         if self.logprob_diff is not None:
             self.logprob_diff = self.logprob_diff.to("cpu", non_blocking=True)
+
+        if self.routed_experts_output is not None:
+            self.routed_experts_output.copy_to_cpu()
 
         if (x := self.expert_distribution_metrics) is not None:
             x.copy_to_cpu()
