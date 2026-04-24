@@ -507,6 +507,8 @@ class ServerArgs:
     smc_resample_method: Literal["systematic", "multinomial"] = "systematic"
     smc_fast_resample: bool = False
     smc_draft_mode: Literal["dense", "eagle3"] = "dense"
+    smc_eagle3_collect_path: Optional[str] = None
+    smc_eagle3_collect_shard_mb: int = 512
 
     # Speculative decoding (ngram)
     speculative_ngram_min_match_window_size: int = 1
@@ -4859,6 +4861,23 @@ class ServerArgs:
                 "the draft. 'eagle3' runs an EAGLE3 head over the target's "
                 "aux hidden states."
             ),
+        )
+        parser.add_argument(
+            "--smc-eagle3-collect-path",
+            type=str,
+            default=ServerArgs.smc_eagle3_collect_path,
+            help=(
+                "If set and --smc-draft-mode=eagle3, dump per-cycle (target "
+                "aux hidden, committed token, absolute position) tuples into "
+                "sharded .pt files under this directory.  Used to build the "
+                "training set for a SMC-native EAGLE head."
+            ),
+        )
+        parser.add_argument(
+            "--smc-eagle3-collect-shard-mb",
+            type=int,
+            default=ServerArgs.smc_eagle3_collect_shard_mb,
+            help="Soft cap (in MiB) for each collected shard before rotating.",
         )
         parser.add_argument(
             "--smc-fast-resample",
