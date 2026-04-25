@@ -287,6 +287,14 @@ class ModelConfig:
     def _config_draft_model(self):
         is_draft_model = self.is_draft_model
 
+        if is_draft_model and getattr(self.hf_config, "draft_vocab_size", None) is not None:
+            # EAGLE/EAGLE3 draft checkpoints are often published with the base
+            # architecture name (e.g. LlamaForCausalLM) plus a draft_vocab_size
+            # field. Route them to the SGLang EAGLE3 implementation so reduced
+            # hot-vocab heads and d2t/t2d mappings load correctly.
+            if self.hf_config.architectures[0] == "LlamaForCausalLM":
+                self.hf_config.architectures[0] = "LlamaForCausalLMEagle3"
+
         if is_draft_model and self.hf_config.architectures[0] in [
             "DeepseekV3ForCausalLM",
             "GlmMoeDsaForCausalLM",
