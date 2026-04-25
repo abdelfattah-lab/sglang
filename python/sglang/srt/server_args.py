@@ -506,7 +506,16 @@ class ServerArgs:
     smc_resample_threshold: float = 0.5
     smc_resample_method: Literal["systematic", "multinomial"] = "systematic"
     smc_fast_resample: bool = False
-    smc_draft_mode: Literal["dense", "eagle3"] = "dense"
+    smc_draft_mode: Literal[
+        "dense",
+        "eagle3",
+        "eagle3_chain",
+        "eagle3_tree_probe",
+        "eagle3_tree_smc",
+        "eagle3_tree_oracle",
+    ] = "dense"
+    smc_eagle_topk: int = 4
+    smc_eagle_num_draft_tokens: Optional[int] = None
     smc_eagle3_collect_path: Optional[str] = None
     smc_eagle3_collect_shard_mb: int = 512
 
@@ -2999,9 +3008,24 @@ class ServerArgs:
                 )
 
             self.enable_mixed_chunk = False
-            self.speculative_eagle_topk = 1
+            if self.smc_draft_mode in ("eagle3", "eagle3_chain"):
+                self.smc_draft_mode = "eagle3_chain"
+                self.speculative_eagle_topk = 1
+                self.speculative_num_draft_tokens = self.smc_gamma + 1
+            elif self.smc_draft_mode in (
+                "eagle3_tree_probe",
+                "eagle3_tree_smc",
+                "eagle3_tree_oracle",
+            ):
+                self.speculative_eagle_topk = self.smc_eagle_topk
+                if self.smc_eagle_num_draft_tokens is None:
+                    self.speculative_num_draft_tokens = self.smc_gamma + 1
+                else:
+                    self.speculative_num_draft_tokens = self.smc_eagle_num_draft_tokens
+            else:
+                self.speculative_eagle_topk = 1
+                self.speculative_num_draft_tokens = self.smc_gamma + 1
             self.speculative_num_steps = self.smc_gamma
-            self.speculative_num_draft_tokens = self.smc_gamma + 1
             self.disable_overlap_schedule = True
             logger.warning("SMC speculative decoding uses the normal scheduler policy.")
             if self.speculative_draft_model_path is None:
@@ -4854,12 +4878,35 @@ class ServerArgs:
         parser.add_argument(
             "--smc-draft-mode",
             type=str,
-            choices=["dense", "eagle3"],
+            choices=[
+                "dense",
+                "eagle3",
+                "eagle3_chain",
+                "eagle3_tree_probe",
+                "eagle3_tree_smc",
+                "eagle3_tree_oracle",
+            ],
             default=ServerArgs.smc_draft_mode,
             help=(
-                "SMC draft model architecture. 'dense' runs an ordinary LM as "
-                "the draft. 'eagle3' runs an EAGLE3 head over the target's "
-                "aux hidden states."
+                "SMC draft mode. 'dense' runs an ordinary LM as the draft; "
+                "'eagle3' aliases 'eagle3_chain'; 'eagle3_tree_probe' and "
+                "'eagle3_tree_smc' run EAGLE3 tree paths; "
+                "'eagle3_tree_oracle' chooses the target-best path for diagnostics."
+            ),
+        )
+        parser.add_argument(
+            "--smc-eagle-topk",
+            type=int,
+            default=ServerArgs.smc_eagle_topk,
+            help="EAGLE top-k branching factor for SMC EAGLE tree modes.",
+        )
+        parser.add_argument(
+            "--smc-eagle-num-draft-tokens",
+            type=int,
+            default=ServerArgs.smc_eagle_num_draft_tokens,
+            help=(
+                "Number of EAGLE tree nodes to verify in SMC tree modes. "
+                "Defaults to smc_gamma + 1 for the initial spike."
             ),
         )
         parser.add_argument(
