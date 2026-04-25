@@ -506,6 +506,9 @@ class ServerArgs:
     smc_resample_threshold: float = 0.5
     smc_resample_method: Literal["systematic", "multinomial"] = "systematic"
     smc_fast_resample: bool = False
+    smc_metrics: bool = False
+    smc_metrics_log_interval: int = 50
+    smc_metrics_jsonl: Optional[str] = None
 
     # Speculative decoding (ngram)
     speculative_ngram_min_match_window_size: int = 1
@@ -4860,6 +4863,24 @@ class ServerArgs:
                 "Default (off) runs the per-group Python slow path, which is "
                 "the reference for accuracy testing."
             ),
+        )
+        parser.add_argument(
+            "--smc-metrics",
+            action="store_true",
+            default=ServerArgs.smc_metrics,
+            help="Enable lightweight SMC diagnostic logging (ESS, log-weight variance, resampling).",
+        )
+        parser.add_argument(
+            "--smc-metrics-log-interval",
+            type=int,
+            default=ServerArgs.smc_metrics_log_interval,
+            help="Log aggregate SMC metrics every N decode steps when --smc-metrics is enabled.",
+        )
+        parser.add_argument(
+            "--smc-metrics-jsonl",
+            type=str,
+            default=ServerArgs.smc_metrics_jsonl,
+            help="Optional JSONL file for per-step SMC metrics when --smc-metrics is enabled.",
         )
         # Speculative decoding (ngram)
         parser.add_argument(
