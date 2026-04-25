@@ -506,6 +506,18 @@ class ServerArgs:
     smc_resample_threshold: float = 0.5
     smc_resample_method: Literal["systematic", "multinomial"] = "systematic"
     smc_fast_resample: bool = False
+    smc_draft_mode: Literal[
+        "dense",
+        "eagle3",
+        "eagle3_chain",
+        "eagle3_tree_probe",
+        "eagle3_tree_smc",
+        "eagle3_tree_oracle",
+    ] = "dense"
+    smc_eagle_topk: int = 4
+    smc_eagle_num_draft_tokens: Optional[int] = None
+    smc_eagle3_collect_path: Optional[str] = None
+    smc_eagle3_collect_shard_mb: int = 512
     smc_metrics: bool = False
     smc_metrics_log_interval: int = 50
     smc_metrics_jsonl: Optional[str] = None
@@ -2999,9 +3011,24 @@ class ServerArgs:
                 )
 
             self.enable_mixed_chunk = False
-            self.speculative_eagle_topk = 1
+            if self.smc_draft_mode in ("eagle3", "eagle3_chain"):
+                self.smc_draft_mode = "eagle3_chain"
+                self.speculative_eagle_topk = 1
+                self.speculative_num_draft_tokens = self.smc_gamma + 1
+            elif self.smc_draft_mode in (
+                "eagle3_tree_probe",
+                "eagle3_tree_smc",
+                "eagle3_tree_oracle",
+            ):
+                self.speculative_eagle_topk = self.smc_eagle_topk
+                if self.smc_eagle_num_draft_tokens is None:
+                    self.speculative_num_draft_tokens = self.smc_gamma + 1
+                else:
+                    self.speculative_num_draft_tokens = self.smc_eagle_num_draft_tokens
+            else:
+                self.speculative_eagle_topk = 1
+                self.speculative_num_draft_tokens = self.smc_gamma + 1
             self.speculative_num_steps = self.smc_gamma
-            self.speculative_num_draft_tokens = self.smc_gamma + 1
             self.disable_overlap_schedule = True
             logger.warning("SMC speculative decoding uses the normal scheduler policy.")
             if self.speculative_draft_model_path is None:
@@ -4863,6 +4890,47 @@ class ServerArgs:
                 "Default (off) runs the per-group Python slow path, which is "
                 "the reference for accuracy testing."
             ),
+        )
+        parser.add_argument(
+            "--smc-draft-mode",
+            type=str,
+            choices=[
+                "dense",
+                "eagle3",
+                "eagle3_chain",
+                "eagle3_tree_probe",
+                "eagle3_tree_smc",
+                "eagle3_tree_oracle",
+            ],
+            default=ServerArgs.smc_draft_mode,
+            help=(
+                "SMC draft mode. 'dense' runs an ordinary LM draft; "
+                "'eagle3' aliases 'eagle3_chain'. Tree modes are experimental."
+            ),
+        )
+        parser.add_argument(
+            "--smc-eagle-topk",
+            type=int,
+            default=ServerArgs.smc_eagle_topk,
+            help="EAGLE top-k branching factor for SMC EAGLE tree modes.",
+        )
+        parser.add_argument(
+            "--smc-eagle-num-draft-tokens",
+            type=int,
+            default=ServerArgs.smc_eagle_num_draft_tokens,
+            help="Number of EAGLE tree nodes to verify in SMC tree modes.",
+        )
+        parser.add_argument(
+            "--smc-eagle3-collect-path",
+            type=str,
+            default=ServerArgs.smc_eagle3_collect_path,
+            help="Optional path for future EAGLE on-policy training-data capture.",
+        )
+        parser.add_argument(
+            "--smc-eagle3-collect-shard-mb",
+            type=int,
+            default=ServerArgs.smc_eagle3_collect_shard_mb,
+            help="Soft shard size in MiB for future EAGLE on-policy data collection.",
         )
         parser.add_argument(
             "--smc-metrics",
