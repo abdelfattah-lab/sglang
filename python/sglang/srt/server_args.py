@@ -518,6 +518,7 @@ class ServerArgs:
     smc_eagle_num_draft_tokens: Optional[int] = None
     smc_eagle3_collect_path: Optional[str] = None
     smc_eagle3_collect_shard_mb: int = 512
+    smc_eagle_eps_uniform: float = 0.0
     smc_metrics: bool = False
     smc_metrics_log_interval: int = 50
     smc_metrics_jsonl: Optional[str] = None
@@ -4931,6 +4932,14 @@ class ServerArgs:
             type=int,
             default=ServerArgs.smc_eagle3_collect_shard_mb,
             help="Soft shard size in MiB for future EAGLE on-policy data collection.",
+        )
+        parser.add_argument(
+            "--smc-eagle-eps-uniform",
+            type=float,
+            default=ServerArgs.smc_eagle_eps_uniform,
+            help="Universal SMC safety belt: epsilon for q_mix = (1-eps)*q_eagle + eps*Uniform(V). "
+                 "Bounds the worst-case log p - log q weight at the cost of a small proposal bias. "
+                 "0.0 disables. Typical values 0.01-0.05.",
         )
         parser.add_argument(
             "--smc-metrics",
