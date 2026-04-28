@@ -194,9 +194,11 @@ class LlamaForCausalLMEagle3(LlamaForCausalLM):
         self.quant_config = quant_config
         self.pp_group = get_pp_group()
 
-        if self.config.num_hidden_layers != 1:
-            raise ValueError("EAGLE3 currently only supports 1 layer")
-
+        # EAGLE3 historically shipped with num_hidden_layers=1; multi-layer
+        # variants are valid and trained successfully via SpecForge. The
+        # underlying LlamaModel is depth-agnostic so we lift the guard. If a
+        # depth other than 1 turns out to break some EAGLE-specific code
+        # path, the failure will surface from that specific site.
         self.model = LlamaModel(
             config, quant_config=quant_config, prefix=add_prefix("model", prefix)
         )
