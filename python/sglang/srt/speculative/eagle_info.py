@@ -622,6 +622,8 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
     topk_index: torch.Tensor = None
     # shape: (b, hidden_size)
     hidden_states: torch.Tensor = None
+    target_anchor: torch.Tensor = None
+    draft_step: Optional[int] = None
     capture_hidden_mode: CaptureHiddenMode = CaptureHiddenMode.FULL
 
     # Inputs for extend

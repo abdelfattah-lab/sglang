@@ -38,6 +38,7 @@ from sglang.srt.layers.vocab_parallel_embedding import (
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, PPProxyTensors
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.llama import LlamaDecoderLayer, LlamaForCausalLM, LlamaMLP
+from sglang.srt.utils.hf_transformers_utils import get_rope_config
 
 
 class LlamaDecoderLayer(LlamaDecoderLayer):
@@ -111,13 +112,13 @@ class LlamaModel(nn.Module):
         super().__init__()
         self.config = config
 
-        rope_scaling = config.rope_parameters
+        _, rope_scaling = get_rope_config(config)
         self.is_mrope_enabled = (
             rope_scaling is not None and "mrope_section" in rope_scaling
         )
         # fix rope_scaling for qwen2.5-vl
         if self.is_mrope_enabled:
-            config.rope_parameters["rope_type"] = "default"
+            rope_scaling["rope_type"] = "default"
 
         self.vocab_size = config.vocab_size
         self.embed_tokens = VocabParallelEmbedding(

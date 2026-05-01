@@ -53,6 +53,7 @@ from sglang.srt.model_loader.weight_utils import (
 )
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import add_prefix, is_npu, make_layers
+from sglang.srt.utils.hf_transformers_utils import get_rope_config
 from sglang.utils import get_exception_traceback
 
 logger = logging.getLogger(__name__)
@@ -252,8 +253,7 @@ class LlamaDecoderLayer(nn.Module):
     ) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
-        rope_theta = config.rope_parameters["rope_theta"]
-        rope_scaling = config.rope_parameters
+        rope_theta, rope_scaling = get_rope_config(config)
         if rope_scaling is not None and getattr(
             config, "original_max_position_embeddings", None
         ):
