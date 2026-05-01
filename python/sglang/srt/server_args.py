@@ -506,6 +506,8 @@ class ServerArgs:
     smc_resample_threshold: float = 0.5
     smc_resample_method: Literal["systematic", "multinomial"] = "systematic"
     smc_fast_resample: bool = False
+    smc_draft_mode: Literal["dense", "eagle3", "dflash"] = "dense"
+    eagle3_residual_alpha: float = 0.0
 
     # Speculative decoding (ngram)
     speculative_ngram_min_match_window_size: int = 1
