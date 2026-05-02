@@ -506,6 +506,7 @@ class ServerArgs:
     smc_resample_threshold: float = 0.5
     smc_resample_method: Literal["systematic", "multinomial"] = "systematic"
     smc_fast_resample: bool = False
+    smc_shared_prefix_attn: bool = False
 
     # Speculative decoding (ngram)
     speculative_ngram_min_match_window_size: int = 1
@@ -2972,7 +2973,7 @@ class ServerArgs:
                 "decode_attention_backend": decode_attention_backend,
                 "speculative_draft_attention_backend": draft_attention_backend,
             }
-            smc_supported_backends = {"triton", "fa3"}
+            smc_supported_backends = {"triton", "fa3", "flashinfer"}
             unsupported_attention_backends = {
                 name: backend
                 for name, backend in smc_attention_backends.items()
@@ -4859,6 +4860,18 @@ class ServerArgs:
                 "Requires --smc-resample-method=systematic and CUDA.  "
                 "Default (off) runs the per-group Python slow path, which is "
                 "the reference for accuracy testing."
+            ),
+        )
+        parser.add_argument(
+            "--smc-shared-prefix-attn",
+            action="store_true",
+            default=ServerArgs.smc_shared_prefix_attn,
+            help=(
+                "Enable cascade-attention for the SMC verify pass: gangs the "
+                "N×(γ+1) verify queries within a group against the shared "
+                "prompt-prefix KV (read once) and the per-particle suffix KV "
+                "(read per particle), then merges via online-softmax.  "
+                "Requires --attention-backend flashinfer.  Default off."
             ),
         )
         # Speculative decoding (ngram)
