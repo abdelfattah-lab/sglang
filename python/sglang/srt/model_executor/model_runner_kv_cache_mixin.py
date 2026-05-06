@@ -508,10 +508,17 @@ class ModelRunnerKVCacheMixin:
                         get_attention_tp_size()
                     ),
                     head_dim=self.model_config.head_dim,
-                    # if draft worker, we only need 1 attention layer's kv pool
+                    # If the draft is an EAGLE / NextN / MTP head it has a
+                    # single attention layer (layer 0) and we only need one
+                    # slot. But algorithms like SMC use a *full* independent
+                    # causal LM as the draft, so it has all the model's
+                    # full-attention layers and needs a KV slot per layer.
                     full_attention_layer_ids=(
                         [0]
-                        if self.is_draft_worker
+                        if (
+                            self.is_draft_worker
+                            and not self.model_config._spec_algo_uses_independent_draft()
+                        )
                         else [
                             i
                             for i in config.full_attention_layer_ids
