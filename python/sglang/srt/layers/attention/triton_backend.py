@@ -88,6 +88,9 @@ class TritonAttnBackend(AttentionBackend):
             extend_attention_fwd,
             extend_attention_fwd_unified,
         )
+        from sglang.srt.layers.attention.triton_ops.linear_verify_split import (
+            linear_verify_split_attention,
+        )
 
         super().__init__()
 
@@ -97,6 +100,9 @@ class TritonAttnBackend(AttentionBackend):
             extend_attention_fwd_unified
         )
         self.build_unified_kv_indices = torch.compiler.disable(build_unified_kv_indices)
+        self.linear_verify_split_attention = torch.compiler.disable(
+            linear_verify_split_attention
+        )
 
         # Parse args
         self.skip_prefill = skip_prefill
@@ -144,6 +150,14 @@ class TritonAttnBackend(AttentionBackend):
             "SGLANG_TRITON_DECODE_ATTN_STATIC_KV_SPLITS", "false"
         )
         self.max_kv_splits = model_runner.server_args.triton_attention_num_kv_splits
+        # SMC linear TARGET_VERIFY split-KV path (opt-in): per-token virtual
+        # rows through the grouped split-KV decode kernel + a fused
+        # in-flight/merge kernel, replacing the extend kernel whose
+        # (bs, heads) grid under-occupies the GPU and scans the prefix
+        # serially.  See triton_ops/linear_verify_split.py.
+        self.enable_verify_kv_splits = get_bool_env_var(
+            "SMC_VERIFY_KV_SPLITS", "false"
+        )
 
         self.allow_bidirectional_attention_in_extend = (
             model_runner.server_args.disable_cuda_graph
@@ -266,6 +280,88 @@ class TritonAttnBackend(AttentionBackend):
             MAX_NUM_SEQ=SCHEDULE_SEQ,
         )
 
+    def _linear_verify_split_enabled(self) -> bool:
+        """Whether the SMC linear-verify split-KV path applies.
+
+        Backend-level gates only; per-layer oddballs (sinks, fp8 KV scale,
+        MLA head split) assert in forward_extend.  Sliding-window models
+        keep the stock path because split metadata replaces the
+        request-level kv_indptr/kv_indices the window path shares.
+        """
+        return (
+            self.enable_verify_kv_splits
+            and not self.enable_deterministic
+            and not self.use_mla
+            and (self.num_draft_tokens or 0) > 0
+            and (self.sliding_window_size is None or self.sliding_window_size <= 0)
+        )
+
+    def _use_verify_split_graph(self, bs: int) -> bool:
+        """Graph-path gate for the split-KV verify: backend gates plus
+        capacity of the persistent decode-graph buffers this path reuses.
+        The target backend's buffers are max_num_tokens-sized (covers
+        bs*ext rows); the draft head's backend was sized by its decode
+        runner (max_bs rows), so 2*bs head rows can exceed them at large
+        bs — fall back to the stock extend path there.  Capture and replay
+        evaluate the same formula, so they always agree per bucket.
+        """
+        if not self._linear_verify_split_enabled():
+            return False
+        attn_logits = getattr(self, "cuda_graph_attn_logits", None)
+        if attn_logits is None or (
+            getattr(self, "cuda_graph_verify_kv_indptr", None) is None
+        ):
+            return False
+        return bs * self.num_draft_tokens <= attn_logits.shape[0]
+
+    def _linear_verify_split_metadata(
+        self,
+        bs,
+        req_pool_indices,
+        prefix_lens,
+        kv_indptr_buf,
+        kv_indices_buf,
+        num_kv_splits_buf,
+        attn_logits_buf,
+        attn_lse_buf,
+        update_splits: bool,
+    ):
+        """Build per-token-row arrays for the linear-verify split-KV path.
+
+        Row (r, i) = verify token i of request r; its kv range is request
+        r's prefix (the in-flight block is handled by the merge kernel from
+        the layer's k/v inputs, never via these indices).  All buffers are
+        caller-provided so the cuda-graph path passes its persistent
+        buffers and the eager path passes fresh allocations.
+        """
+        ext = self.num_draft_tokens
+        num_tokens = bs * ext
+        rep_prefix = prefix_lens.repeat_interleave(ext)
+        kv_indptr = kv_indptr_buf[: num_tokens + 1]
+        kv_indptr[0] = 0
+        kv_indptr[1 : num_tokens + 1] = torch.cumsum(rep_prefix, dim=0)
+        create_flashinfer_kv_indices_triton[(num_tokens,)](
+            self.req_to_token,
+            req_pool_indices.repeat_interleave(ext),
+            rep_prefix,
+            kv_indptr,
+            None,
+            kv_indices_buf,
+            self.req_to_token.stride(0),
+        )
+        num_kv_splits = num_kv_splits_buf[:num_tokens]
+        if update_splits:
+            # num_token = bs*ext rows against bs lens: get_num_kv_splits
+            # natively handles the grouped case (num_group = ext).
+            self.get_num_kv_splits(num_kv_splits, prefix_lens)
+        return (
+            kv_indptr,
+            kv_indices_buf,
+            num_kv_splits,
+            attn_logits_buf[:num_tokens],
+            attn_lse_buf[:num_tokens],
+        )
+
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Init auxiliary variables for triton attention backend."""
 
@@ -345,7 +441,47 @@ class TritonAttnBackend(AttentionBackend):
             mask_indptr = None
             max_extend_len = None
         elif forward_batch.forward_mode.is_target_verify():
-            if _is_linear_target_verify(spec_info):
+            if _is_linear_target_verify(spec_info) and self._linear_verify_split_enabled():
+                ext = self.num_draft_tokens
+                num_tokens = bs * ext
+                (
+                    kv_indptr,
+                    kv_indices,
+                    num_kv_splits,
+                    attn_logits,
+                    attn_lse,
+                ) = self._linear_verify_split_metadata(
+                    bs,
+                    forward_batch.req_pool_indices,
+                    forward_batch.extend_prefix_lens,
+                    torch.zeros(
+                        (num_tokens + 1,), dtype=torch.int32, device=self.device
+                    ),
+                    torch.empty(
+                        _sum_cpu_lengths(forward_batch.extend_prefix_lens_cpu) * ext,
+                        dtype=torch.int64,
+                        device=self.device,
+                    ),
+                    torch.empty(
+                        (num_tokens,), dtype=torch.int32, device=self.device
+                    ),
+                    torch.empty(
+                        (num_tokens, self.num_head, self.max_kv_splits, self.v_head_dim),
+                        dtype=torch.float32,
+                        device=self.device,
+                    ),
+                    torch.empty(
+                        (num_tokens, self.num_head, self.max_kv_splits),
+                        dtype=torch.float32,
+                        device=self.device,
+                    ),
+                    update_splits=True,
+                )
+                qo_indptr = None
+                custom_mask = None
+                mask_indptr = None
+                max_extend_len = ext
+            elif _is_linear_target_verify(spec_info):
                 kv_indptr[1 : bs + 1] = torch.cumsum(
                     forward_batch.extend_prefix_lens, dim=0
                 )
@@ -559,6 +695,13 @@ class TritonAttnBackend(AttentionBackend):
             dtype=torch.float32,
             device=self.device,
         )
+        # Token-level indptr for the SMC linear-verify split-KV path
+        # (bs*ext + 1 entries; the other buffers that path needs —
+        # kv_indices, num_kv_splits, attn_logits/lse — are already
+        # max_num_tokens-sized above).
+        self.cuda_graph_verify_kv_indptr = torch.zeros(
+            (max_num_tokens + 1,), dtype=torch.int32, device=self.device
+        )
 
         if cuda_graph_num_kv_splits_buf is None:
             self.cuda_graph_num_kv_splits = torch.full(
@@ -671,7 +814,32 @@ class TritonAttnBackend(AttentionBackend):
             custom_mask = None
             mask_indptr = None
         elif forward_mode.is_target_verify():
-            if _is_linear_target_verify(spec_info):
+            if _is_linear_target_verify(spec_info) and self._use_verify_split_graph(bs):
+                # Split-KV path: per-token rows in persistent graph buffers.
+                # Contents are dummies at capture (split counts stay at the
+                # buffer's prefilled max); replay refreshes everything.
+                (
+                    kv_indptr,
+                    kv_indices,
+                    num_kv_splits,
+                    attn_logits,
+                    attn_lse,
+                ) = self._linear_verify_split_metadata(
+                    bs,
+                    req_pool_indices,
+                    seq_lens,
+                    self.cuda_graph_verify_kv_indptr,
+                    self.cuda_graph_kv_indices,
+                    self.cuda_graph_num_kv_splits,
+                    self.cuda_graph_attn_logits,
+                    self.cuda_graph_attn_lse,
+                    update_splits=False,
+                )
+                qo_indptr = None
+                custom_mask = None
+                mask_indptr = None
+                max_extend_len = self.num_draft_tokens
+            elif _is_linear_target_verify(spec_info):
                 extend_seq_lens = torch.full(
                     (bs,),
                     self.num_draft_tokens,
@@ -877,7 +1045,21 @@ class TritonAttnBackend(AttentionBackend):
             self.get_num_kv_splits(num_kv_splits[:num_token], seq_lens[:bs])
 
         elif forward_mode.is_target_verify():
-            if _is_linear_target_verify(spec_info):
+            if _is_linear_target_verify(spec_info) and self._use_verify_split_graph(bs):
+                # Split-KV path: refresh the persistent token-row buffers the
+                # captured kernels read (indptr, indices, per-row splits).
+                self._linear_verify_split_metadata(
+                    bs,
+                    req_pool_indices,
+                    seq_lens,
+                    self.cuda_graph_verify_kv_indptr,
+                    self.cuda_graph_kv_indices,
+                    self.cuda_graph_num_kv_splits,
+                    self.cuda_graph_attn_logits,
+                    self.cuda_graph_attn_lse,
+                    update_splits=True,
+                )
+            elif _is_linear_target_verify(spec_info):
                 extend_seq_lens = torch.full(
                     (bs,),
                     self.num_draft_tokens,
@@ -1070,6 +1252,45 @@ class TritonAttnBackend(AttentionBackend):
             )
         ):
             causal = False
+
+        # SMC linear TARGET_VERIFY split-KV path (SMC_VERIFY_KV_SPLITS=1):
+        # the metadata branch built per-token rows (marker: num_kv_splits
+        # set in a verify-mode batch) — run the grouped split-KV stage 1
+        # over the prefix + the fused in-flight/merge kernel instead of the
+        # (bs, heads)-grid extend kernel.
+        if (
+            forward_batch.forward_mode.is_target_verify()
+            and _is_linear_target_verify(forward_batch.spec_info)
+            and self.forward_metadata.num_kv_splits is not None
+        ):
+            assert (
+                sinks is None
+                and layer.k_scale is None
+                and layer.qk_head_dim == layer.v_head_dim
+                and layer.xai_temperature_len <= 0
+                and not (
+                    layer.sliding_window_size is not None
+                    and layer.sliding_window_size > -1
+                )
+            ), "SMC_VERIFY_KV_SPLITS supports plain dense attention only"
+            self.linear_verify_split_attention(
+                q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
+                k.contiguous().view(-1, layer.tp_k_head_num, layer.qk_head_dim),
+                v.contiguous().view(-1, layer.tp_k_head_num, layer.v_head_dim),
+                o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
+                forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
+                forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
+                self.forward_metadata.kv_indptr,
+                self.forward_metadata.kv_indices,
+                self.forward_metadata.num_kv_splits,
+                self.forward_metadata.attn_logits,
+                self.forward_metadata.attn_lse,
+                self.max_kv_splits,
+                self.num_draft_tokens,
+                layer.scaling,
+                logit_cap=logits_soft_cap,
+            )
+            return o
 
         # Deterministic mode: use unified 1-stage kernel
         if self.enable_deterministic:
