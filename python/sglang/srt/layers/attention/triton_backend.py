@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Optional
 
@@ -93,6 +94,20 @@ class TritonAttnBackend(AttentionBackend):
 
         self.decode_attention_fwd = torch.compiler.disable(decode_attention_fwd)
         self.extend_attention_fwd = torch.compiler.disable(extend_attention_fwd)
+        # SMC fast linear-verify kernel (split-KV + GQA-packed; smcsd repo).
+        # Optional: absent outside SMC deployments, kill-switch SMC_FAST_VERIFY=0.
+        self.smc_verify_attention_fwd = None
+        if os.environ.get("SMC_FAST_VERIFY", "1") == "1":
+            try:
+                from smcsd.core.kernels.verify_attention import (
+                    verify_attention_fwd,
+                )
+
+                self.smc_verify_attention_fwd = torch.compiler.disable(
+                    verify_attention_fwd
+                )
+            except ImportError:
+                pass
         self.extend_attention_fwd_unified = torch.compiler.disable(
             extend_attention_fwd_unified
         )
@@ -1097,6 +1112,40 @@ class TritonAttnBackend(AttentionBackend):
         else:
             k_descale = 1.0
             v_descale = 1.0
+
+        # SMC linear TARGET_VERIFY fast path: uniform extend length, causal,
+        # no custom mask / SWA / sinks / logit cap / kv scales.  The stock
+        # extend kernel walks the whole prefix serially per q-head (~0.4 TB/s
+        # at 4k ctx on B200); the split-KV GQA-packed kernel reads prefix KV
+        # once per kv-head, in parallel chunks.
+        spec_info = forward_batch.spec_info
+        if (
+            self.smc_verify_attention_fwd is not None
+            and forward_batch.forward_mode.is_target_verify()
+            and _is_linear_target_verify(spec_info)
+            and causal
+            and sliding_window_size == -1
+            and sinks is None
+            and logits_soft_cap == 0
+            and self.forward_metadata.custom_mask is None
+            and k_descale == 1.0
+            and v_descale == 1.0
+            and layer.qk_head_dim == layer.v_head_dim
+            and (layer.qk_head_dim & (layer.qk_head_dim - 1)) == 0
+        ):
+            self.smc_verify_attention_fwd(
+                q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
+                k.contiguous(),
+                v.contiguous(),
+                o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
+                forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
+                forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
+                kv_indptr,
+                kv_indices,
+                spec_info.draft_token_num,
+                layer.scaling,
+            )
+            return o
 
         self.extend_attention_fwd(
             q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
