@@ -360,7 +360,13 @@ class TritonAttnBackend(AttentionBackend):
             mask_indptr = None
             max_extend_len = None
         elif forward_batch.forward_mode.is_target_verify():
-            if _is_linear_target_verify(spec_info):
+            # extend_prefix_lens is None on warmup dummy runs (flashinfer
+            # autotune builds a TARGET_VERIFY batch without extend fields);
+            # fall through to the standard verify path there.
+            if (
+                _is_linear_target_verify(spec_info)
+                and forward_batch.extend_prefix_lens is not None
+            ):
                 kv_indptr[1 : bs + 1] = torch.cumsum(
                     forward_batch.extend_prefix_lens, dim=0
                 )
