@@ -1267,6 +1267,14 @@ class ServerArgs:
         # 18. CUDA Graph debug mode
         if self.debug_cuda_graph:
             self.disable_piecewise_cuda_graph = True
+        # 19. SMC speculative decoding: piecewise graphs only cover EXTEND
+        # batches (TARGET_VERIFY is excluded in PiecewiseCudaGraphRunner.
+        # can_run), so on SMC's decode-dominated workloads they are
+        # throughput-neutral while costing ~25s startup and ~2GB of memory
+        # that would otherwise go to the SMC KV co-budget. Use
+        # --enforce-piecewise-cuda-graph to opt back in.
+        if self.speculative_algorithm == "SMC":
+            self.disable_piecewise_cuda_graph = True
 
     def _handle_multi_item_scoring(self):
         """Setup and validate multi-item scoring constraints.
