@@ -117,6 +117,15 @@ def install_torch_compiled(
     fullgraph: bool = True,
     graph_pool: Any = None,
 ):
+    if sys.flags.optimize >= 1:
+        # Under `python -O`, assert statements are stripped from bytecode, so
+        # dynamo's assert-rewrite probe (get_assert_bytecode_sequence) finds no
+        # POP_JUMP instruction and raises StopIteration, which surfaces as
+        # InternalTorchDynamoError on the first `is None` branch it traces
+        # (torch 2.11). There are no asserts left to rewrite anyway, so
+        # disabling the rewrite is semantically a no-op.
+        torch._dynamo.config.rewrite_assert_with_torch_assert = False
+
     unbound_fwd = module.__class__.forward
     if not callable(unbound_fwd):
         raise TypeError("module.__class__.forward must be callable")
