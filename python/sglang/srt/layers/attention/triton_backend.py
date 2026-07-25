@@ -108,6 +108,26 @@ class TritonAttnBackend(AttentionBackend):
                 )
             except ImportError:
                 pass
+        # SMC group-shared-prefix ("cascade") decode kernel (smcsd repo).
+        # SMC particles of a group share their KV pages by construction, so
+        # the group's common prefix can be read once per group instead of
+        # once per particle.  Absent outside SMC deployments.  The enable
+        # switch lives on the smcsd side (SMC_CASCADE_DECODE): this import is
+        # inert until something sets `smc_cascade` below.
+        self.smc_cascade_decode_fwd = None
+        try:
+            from smcsd.core.kernels.cascade_decode import cascade_decode_fwd
+
+            self.smc_cascade_decode_fwd = torch.compiler.disable(
+                cascade_decode_fwd
+            )
+        except ImportError:
+            pass
+        # Set by smcsd on the draft step backends: (shared_lens, group_size)
+        # where shared_lens is a persistent (max_bs,) int32 device tensor
+        # refreshed in-graph each cycle.  None on every non-SMC backend, and
+        # on the target backend, so forward_decode keeps its stock path.
+        self.smc_cascade = None
         self.extend_attention_fwd_unified = torch.compiler.disable(
             extend_attention_fwd_unified
         )
@@ -1371,6 +1391,45 @@ class TritonAttnBackend(AttentionBackend):
             and layer.v_head_dim == self.swa_v_head_dim
         ):
             attn_logits = self.forward_metadata.swa_attn_logits
+
+        # SMC cascade: one CTA holds a whole group's query rows and streams
+        # the group's shared prefix once, instead of N particles each
+        # streaming it independently.  Falls through to the stock kernel for
+        # any feature the cascade kernel does not implement, and for batches
+        # that are not group-aligned (idle/padded replays).
+        if (
+            self.smc_cascade is not None
+            and self.smc_cascade_decode_fwd is not None
+            and layer.qk_head_dim == layer.v_head_dim
+            and (
+                layer.sliding_window_size is None
+                or layer.sliding_window_size <= -1
+            )
+            and not logits_soft_cap
+            and sinks is None
+            and layer.xai_temperature_len == -1
+            and k_descale == 1.0
+            and v_descale == 1.0
+        ):
+            shared_lens, group_size = self.smc_cascade
+            bs = q.shape[0]
+            if group_size > 1 and bs % group_size == 0:
+                self.smc_cascade_decode_fwd(
+                    q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
+                    o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
+                    forward_batch.token_to_kv_pool.get_key_buffer(
+                        layer.layer_id
+                    ),
+                    forward_batch.token_to_kv_pool.get_value_buffer(
+                        layer.layer_id
+                    ),
+                    kv_indptr,
+                    kv_indices,
+                    shared_lens[:bs],
+                    group_size,
+                    layer.scaling,
+                )
+                return o
 
         self.decode_attention_fwd(
             q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
