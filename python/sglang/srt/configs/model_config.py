@@ -144,6 +144,7 @@ class ModelConfig:
         encoder_only: bool = False,
         language_only: bool = False,
         disable_hybrid_swa_memory: bool = False,
+        speculative_algorithm: Optional[str] = None,
     ) -> None:
         # Parse args
         self.model_path = model_path
@@ -155,6 +156,11 @@ class ModelConfig:
         self.quantize_and_serve = quantize_and_serve
         self.is_multi_layer_eagle = is_multi_layer_eagle
         self.disable_hybrid_swa_memory = disable_hybrid_swa_memory
+        # Used by _config_draft_model to decide whether to rewrite the
+        # draft's HF architecture into an MTP/NextN variant. EAGLE/NextN/MTP
+        # require the rewrite (their drafts consume target hidden states);
+        # SMC and similar independent-draft algorithms must skip it.
+        self.speculative_algorithm = speculative_algorithm
 
         # Validate quantize_and_serve configuration
         self._validate_quantize_and_serve_config()
@@ -335,11 +341,29 @@ class ModelConfig:
             encoder_only=server_args.encoder_only,
             is_draft_model=is_draft_model,
             disable_hybrid_swa_memory=server_args.disable_hybrid_swa_memory,
+            speculative_algorithm=server_args.speculative_algorithm,
             **kwargs,
         )
 
+    def _spec_algo_uses_independent_draft(self) -> bool:
+        """Return True iff the configured speculative algorithm runs the draft
+        as an independent causal LM (its forward does NOT consume target
+        last-layer hidden states). Independent-draft algorithms must NOT be
+        routed through MTP/NextN model variants. Currently: SMC."""
+        algo = (self.speculative_algorithm or "").upper()
+        return algo == "SMC"
+
     def _config_draft_model(self):
         is_draft_model = self.is_draft_model
+
+        # The rewrites below map a draft model's HF architecture onto its
+        # MTP / NextN variant (forward signature: takes target last-layer
+        # hidden states via spec_info). That convention is correct for
+        # EAGLE / NextN / MTP-style speculative decoding but wrong for
+        # algorithms whose draft is an independent causal LM running its
+        # own forward — notably SMC. Skip the rewrite for those.
+        if is_draft_model and self._spec_algo_uses_independent_draft():
+            return
 
         if is_draft_model and self.hf_config.architectures[0] in [
             "DeepseekV3ForCausalLM",

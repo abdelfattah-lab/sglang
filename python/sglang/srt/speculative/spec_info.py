@@ -19,6 +19,7 @@ class SpeculativeAlgorithm(Enum):
     EAGLE = auto()
     EAGLE3 = auto()
     STANDALONE = auto()
+    SMC = auto()
     NGRAM = auto()
     NONE = auto()
 
@@ -50,11 +51,14 @@ class SpeculativeAlgorithm(Enum):
     def is_standalone(self) -> bool:
         return self == SpeculativeAlgorithm.STANDALONE
 
+    def is_smc(self) -> bool:
+        return self == SpeculativeAlgorithm.SMC
+
     def is_ngram(self) -> bool:
         return self == SpeculativeAlgorithm.NGRAM
 
     def supports_spec_v2(self) -> bool:
-        return self.is_eagle() or self.is_standalone()
+        return self.is_eagle() or self.is_standalone() or self.is_smc()
 
     def create_worker(
         self, server_args: ServerArgs
@@ -127,6 +131,8 @@ class SpecInputType(IntEnum):
     # If all algorithms can share the same datastrucutre of draft_input and verify_input, consider simplify it
     EAGLE_DRAFT = auto()
     EAGLE_VERIFY = auto()
+    SMC_DRAFT = auto()
+    SMC_VERIFY = auto()
     DFLASH_DRAFT = auto()
     DFLASH_VERIFY = auto()
     NGRAM_VERIFY = auto()
@@ -141,6 +147,7 @@ class SpecInput(ABC):
         # or use another variable name like `draft_input` to substitute `spec_info`
         return self.spec_input_type in {
             SpecInputType.EAGLE_DRAFT,
+            SpecInputType.SMC_DRAFT,
             SpecInputType.DFLASH_DRAFT,
         }
 
@@ -164,3 +171,6 @@ class SpecInput(ABC):
             x * c2 for x in forward_batch.global_num_tokens_for_logprob
         ]
         return global_num_tokens, global_num_tokens_for_logprob
+
+    def use_linear_target_verify(self) -> bool:
+        return False

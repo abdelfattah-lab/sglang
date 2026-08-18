@@ -2437,7 +2437,11 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             capture_forward_mode = ForwardMode.EXTEND
         capture_hidden_mode = CaptureHiddenMode.NULL
         num_tokens_per_bs = 1
-        if self.spec_algorithm.is_speculative():
+        # SMC draft workers run their own draft AR loop outside of this capture path.
+        if (
+            self.spec_algorithm.is_speculative()
+            and not (self.spec_algorithm.is_smc() and self.is_draft_worker)
+        ):
             if self.is_draft_worker:
                 if not self.spec_algorithm.is_dflash():
                     raise RuntimeError("This should not happen")
@@ -2562,62 +2566,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         else:
             global_dp_buffer_len = None
 
-        def get_spec_info():
-            spec_info = None
-            if self.spec_algorithm.is_eagle() or self.spec_algorithm.is_standalone():
-                from sglang.srt.speculative.eagle_info import EagleVerifyInput
-
-                if self.is_draft_worker:
-                    raise RuntimeError("This should not happen.")
-                else:
-                    spec_info = EagleVerifyInput(
-                        draft_token=None,
-                        custom_mask=buffers.custom_mask,
-                        positions=None,
-                        retrieve_index=None,
-                        retrieve_next_token=None,
-                        retrieve_next_sibling=None,
-                        retrieve_cum_len=None,
-                        spec_steps=self.server_args.speculative_num_steps,
-                        topk=self.server_args.speculative_eagle_topk,
-                        draft_token_num=self.server_args.speculative_num_draft_tokens,
-                        capture_hidden_mode=CaptureHiddenMode.FULL,
-                        seq_lens_sum=None,
-                        seq_lens_cpu=None,
-                    )
-            elif self.spec_algorithm.is_dflash():
-                from sglang.srt.speculative.dflash_info import DFlashVerifyInput
-
-                # Dummy warmup only needs shape metadata; avoid forcing custom-mask mode.
-                spec_info = DFlashVerifyInput(
-                    draft_token=None,
-                    positions=None,
-                    draft_token_num=self.server_args.speculative_num_draft_tokens,
-                    custom_mask=None,
-                    capture_hidden_mode=(
-                        CaptureHiddenMode.NULL
-                        if self.is_draft_worker
-                        else CaptureHiddenMode.FULL
-                    ),
-                )
-
-            elif self.spec_algorithm.is_ngram():
-                from sglang.srt.speculative.ngram_info import NgramVerifyInput
-
-                spec_info = NgramVerifyInput(
-                    draft_token=None,
-                    tree_mask=buffers.custom_mask,
-                    positions=None,
-                    retrieve_index=None,
-                    retrieve_next_token=None,
-                    retrieve_next_sibling=None,
-                    draft_token_num=num_tokens_per_bs,
-                )
-                spec_info.capture_hidden_mode = CaptureHiddenMode.NULL
-
-            return spec_info
-
-        spec_info = get_spec_info()
+        spec_info = self._build_dummy_run_spec_info(buffers, num_tokens_per_bs)
         if capture_hidden_mode != CaptureHiddenMode.FULL:
             capture_hidden_mode = (
                 spec_info.capture_hidden_mode if spec_info else CaptureHiddenMode.NULL
@@ -2703,6 +2652,63 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         with torch.inference_mode(), run_ctx or empty_context():
             run_once()
 
+    def _build_dummy_run_spec_info(self, buffers, num_tokens_per_bs):
+        """Build the spec_info used during ``_dummy_run`` (autotune / warmup).
+
+        Extension point: subclasses may override to supply their own
+        VerifyInput for their spec algorithm.
+        """
+        spec_info = None
+        if self.spec_algorithm.is_eagle() or self.spec_algorithm.is_standalone():
+            from sglang.srt.speculative.eagle_info import EagleVerifyInput
+
+            if self.is_draft_worker:
+                raise RuntimeError("This should not happen.")
+            spec_info = EagleVerifyInput(
+                draft_token=None,
+                custom_mask=buffers.custom_mask,
+                positions=None,
+                retrieve_index=None,
+                retrieve_next_token=None,
+                retrieve_next_sibling=None,
+                retrieve_cum_len=None,
+                spec_steps=self.server_args.speculative_num_steps,
+                topk=self.server_args.speculative_eagle_topk,
+                draft_token_num=self.server_args.speculative_num_draft_tokens,
+                capture_hidden_mode=CaptureHiddenMode.FULL,
+                seq_lens_sum=None,
+                seq_lens_cpu=None,
+            )
+        elif self.spec_algorithm.is_dflash():
+            from sglang.srt.speculative.dflash_info import DFlashVerifyInput
+
+            # Dummy warmup only needs shape metadata; avoid forcing custom-mask mode.
+            spec_info = DFlashVerifyInput(
+                draft_token=None,
+                positions=None,
+                draft_token_num=self.server_args.speculative_num_draft_tokens,
+                custom_mask=None,
+                capture_hidden_mode=(
+                    CaptureHiddenMode.NULL
+                    if self.is_draft_worker
+                    else CaptureHiddenMode.FULL
+                ),
+            )
+        elif self.spec_algorithm.is_ngram():
+            from sglang.srt.speculative.ngram_info import NgramVerifyInput
+
+            spec_info = NgramVerifyInput(
+                draft_token=None,
+                tree_mask=buffers.custom_mask,
+                positions=None,
+                retrieve_index=None,
+                retrieve_next_token=None,
+                retrieve_next_sibling=None,
+                draft_token_num=num_tokens_per_bs,
+            )
+            spec_info.capture_hidden_mode = CaptureHiddenMode.NULL
+        return spec_info
+
     def maybe_init_ngram_embedding(self):
         self.use_ngram_embedding = self.model_config.use_ngram_embedding
         if self.use_ngram_embedding:
@@ -2778,18 +2784,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         logger.info(
             f"Capture {graph_backend[self.device]} begin. This can take up to several minutes. avail mem={before_mem:.2f} GB"
         )
-        if current_platform.is_out_of_tree():
-            GraphRunnerCls = current_platform.get_graph_runner_cls()
-            self.graph_runner = GraphRunnerCls(self)
-        else:
-            graph_runners = defaultdict(
-                lambda: CudaGraphRunner,
-                {
-                    "cpu": CPUGraphRunner,
-                    "npu": NPUGraphRunner,
-                },
-            )
-            self.graph_runner = graph_runners[self.device](self)
+        self.graph_runner = self._get_graph_runner_class()(self)
 
         after_mem = get_available_gpu_memory(self.device, self.gpu_id)
         self.graph_mem_usage = before_mem - after_mem
@@ -2797,6 +2792,19 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             f"Capture {graph_backend[self.device]} end. Time elapsed: {time.perf_counter() - tic:.2f} s. "
             f"mem usage={self.graph_mem_usage:.2f} GB. avail mem={after_mem:.2f} GB."
         )
+
+    def _get_graph_runner_class(self):
+        """Return the graph runner class for this device.
+
+        Extension point: subclasses may override to supply a specialized
+        graph runner (e.g. with a different ``get_spec_info``).
+        """
+        if current_platform.is_out_of_tree():
+            return current_platform.get_graph_runner_cls()
+        return {
+            "cpu": CPUGraphRunner,
+            "npu": NPUGraphRunner,
+        }.get(self.device, CudaGraphRunner)
 
     def init_piecewise_cuda_graphs(self):
         """Initialize piecewise CUDA graph runner."""

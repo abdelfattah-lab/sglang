@@ -412,7 +412,33 @@ class MambaAttnBackendBase(AttentionBackend):
             max_num_tokens % max_bs == 0
         ), f"max_num_tokens={max_num_tokens} must be divisible by max_bs={max_bs}"
         draft_token_num = max_num_tokens // max_bs
-        for i in range(max_bs):
+        # This backend can be initialized more than once (model-runner decode
+        # graphs first, then an SMC cycle/phase graph runner that shares the
+        # same linear backend).  Graphs captured after the first call hold
+        # references to the per-bs tensors below, so re-init must be
+        # monotonic: extend the lists for new batch sizes, never replace
+        # existing entries, and never shrink the cached query_start_loc
+        # aranges (a shrinking overwrite desyncs them from
+        # query_start_loc_list -> size-mismatch copy_ at replay for any bs
+        # above the second call's max_bs).
+        # Key the layout check on the lists themselves, not just the marker
+        # attribute: the SMC head path shallow-copies this backend and resets
+        # the lists to get a fresh verify-layout instance, and the copied
+        # marker must not veto that.
+        inited_bs = len(self.state_indices_list)
+        prev_dtn = (
+            getattr(self, "_graph_draft_token_num", None) if inited_bs else None
+        )
+        if prev_dtn is not None and prev_dtn != draft_token_num:
+            raise ValueError(
+                "init_cuda_graph_state re-called with draft_token_num="
+                f"{draft_token_num}, but graph state was built with "
+                f"{prev_dtn}; use a dedicated backend instance per layout."
+            )
+        self._graph_draft_token_num = draft_token_num
+        if inited_bs >= max_bs:
+            return
+        for i in range(inited_bs, max_bs):
             self.state_indices_list.append(
                 torch.full(
                     (i + 1,), self.pad_slot_id, dtype=torch.int32, device=self.device

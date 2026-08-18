@@ -43,6 +43,7 @@ class GenerationBatchResult:
     # FIXME(lsyin): maybe move to a better place?
     # sync path: forward stream -> output processor
     accept_lens: Optional[torch.Tensor] = None
+    logprob_diff: Optional[torch.Tensor] = None
 
     # relay path: forward stream -> next step forward
     next_draft_input: Optional[EagleDraftInput] = None
@@ -90,6 +91,8 @@ class GenerationBatchResult:
 
         if self.accept_lens is not None:
             self.accept_lens = self.accept_lens.to("cpu", non_blocking=True)
+        if self.logprob_diff is not None:
+            self.logprob_diff = self.logprob_diff.to("cpu", non_blocking=True)
 
         if self.routed_experts_output is not None:
             self.routed_experts_output.copy_to_cpu()
